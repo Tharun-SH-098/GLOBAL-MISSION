@@ -1,4 +1,4 @@
-package controller;
+package com.globalarm.controller;
 
 import com.globalarm.model.Product;
 import com.globalarm.repository.ProductRepository;

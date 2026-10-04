@@ -19,8 +19,11 @@ public class Product {
     private String licenseNumber;
     private String status;
 
+    // Default constructor
     public Product() {
     }
+
+    // Getters and Setters
 
     public Long getId() {
         return id;

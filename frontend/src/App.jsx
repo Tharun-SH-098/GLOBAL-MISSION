@@ -1,335 +1,257 @@
+import { useEffect, useState } from "react";
 import "./index.css";
 
 function App() {
+  const [products, setProducts] = useState([]);
+
+  const [formData, setFormData] = useState({
+    productName: "",
+    category: "",
+    manufacturer: "",
+    countryOfOrigin: "",
+    licenseNumber: "",
+    status: "Active",
+  });
+
+  const [message, setMessage] = useState("");
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const addProduct = async (e) => {
+    e.preventDefault();
+
+    try {
+      const response = await fetch("http://localhost:8080/api/products", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formData),
+      });
+
+      if (response.ok) {
+        setMessage("Product added successfully!");
+
+        setFormData({
+          productName: "",
+          category: "",
+          manufacturer: "",
+          countryOfOrigin: "",
+          licenseNumber: "",
+          status: "Active",
+        });
+
+        loadProducts();
+      }
+    } catch (error) {
+      setMessage("Backend connection failed.");
+    }
+  };
+
+  const loadProducts = async () => {
+    try {
+      const response = await fetch("http://localhost:8080/api/products");
+      const data = await response.json();
+      setProducts(data);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  useEffect(() => {
+    loadProducts();
+  }, []);
+
+  const activeProducts = products.filter(
+    (product) => product.status === "Active"
+  ).length;
+
+  const inactiveProducts = products.filter(
+    (product) => product.status !== "Active"
+  ).length;
+
   return (
     <div className="app">
 
-      {/* Sidebar */}
-      <aside className="sidebar">
-
-        <div className="logo">
-          <div className="logo-icon">G</div>
-
-          <div>
-            <h2>GLOBAL ARM</h2>
-            <span>Management System</span>
-          </div>
+      <header className="header">
+        <div>
+          <h1>Global ARM Management System</h1>
+          <p>Global Arms Registration & Management Platform</p>
         </div>
 
-        <nav className="navigation">
-
-          <a href="#" className="nav-item active">
-            <span>▣</span>
-            Dashboard
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>↓</span>
-            Import Management
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>↑</span>
-            Export Management
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>◈</span>
-            Products
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>▤</span>
-            Documents
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>✓</span>
-            Compliance
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>▥</span>
-            Reports
-          </a>
-
-        </nav>
-
-        <div className="sidebar-bottom">
-
-          <a href="#" className="nav-item">
-            <span>⚙</span>
-            Settings
-          </a>
-
-          <a href="#" className="nav-item">
-            <span>?</span>
-            Help & Support
-          </a>
-
+        <div className="header-badge">
+          Admin Dashboard
         </div>
+      </header>
 
-      </aside>
+      <main className="container">
 
+        <section className="dashboard">
 
-      {/* Main Content */}
-      <main className="main-content">
-
-        {/* Header */}
-        <header className="top-header">
-
-          <div>
-            <h1>Dashboard</h1>
-            <p>Welcome to Global ARM Management System</p>
+          <div className="card total">
+            <h3>Total Products</h3>
+            <div className="number">{products.length}</div>
           </div>
 
-          <div className="header-right">
+          <div className="card active">
+            <h3>Active Products</h3>
+            <div className="number">{activeProducts}</div>
+          </div>
 
-            <button className="notification">
-              🔔
-              <span className="notification-dot"></span>
+          <div className="card pending">
+            <h3>Inactive Products</h3>
+            <div className="number">{inactiveProducts}</div>
+          </div>
+
+          <div className="card">
+            <h3>System Status</h3>
+            <div className="number">Online</div>
+          </div>
+
+        </section>
+
+        <section className="form-section">
+
+          <h2>Register New Product</h2>
+
+          <form onSubmit={addProduct}>
+
+            <div className="form-grid">
+
+              <div className="form-group">
+                <label>Product Name</label>
+                <input
+                  name="productName"
+                  value={formData.productName}
+                  onChange={handleChange}
+                  placeholder="Enter product name"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Category</label>
+                <input
+                  name="category"
+                  value={formData.category}
+                  onChange={handleChange}
+                  placeholder="Enter category"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Manufacturer</label>
+                <input
+                  name="manufacturer"
+                  value={formData.manufacturer}
+                  onChange={handleChange}
+                  placeholder="Enter manufacturer"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Country of Origin</label>
+                <input
+                  name="countryOfOrigin"
+                  value={formData.countryOfOrigin}
+                  onChange={handleChange}
+                  placeholder="Enter country"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>License Number</label>
+                <input
+                  name="licenseNumber"
+                  value={formData.licenseNumber}
+                  onChange={handleChange}
+                  placeholder="Enter license number"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Status</label>
+                <select
+                  name="status"
+                  value={formData.status}
+                  onChange={handleChange}
+                >
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
+
+            </div>
+
+            <button className="btn" type="submit">
+              + Register Product
             </button>
 
-            <div className="user-profile">
+          </form>
 
-              <div className="user-avatar">
-                TS
-              </div>
-
-              <div>
-                <strong>Administrator</strong>
-                <small>System Admin</small>
-              </div>
-
-            </div>
-
-          </div>
-
-        </header>
-
-
-        {/* Statistics */}
-        <section className="statistics">
-
-          <div className="stat-card">
-
-            <div className="stat-icon import-icon">
-              ↓
-            </div>
-
-            <div>
-              <p>Total Imports</p>
-              <h2>124</h2>
-              <span className="positive">+12% this month</span>
-            </div>
-
-          </div>
-
-
-          <div className="stat-card">
-
-            <div className="stat-icon export-icon">
-              ↑
-            </div>
-
-            <div>
-              <p>Total Exports</p>
-              <h2>98</h2>
-              <span className="positive">+8% this month</span>
-            </div>
-
-          </div>
-
-
-          <div className="stat-card">
-
-            <div className="stat-icon pending-icon">
-              !
-            </div>
-
-            <div>
-              <p>Pending Requests</p>
-              <h2>17</h2>
-              <span className="warning">Requires attention</span>
-            </div>
-
-          </div>
-
-
-          <div className="stat-card">
-
-            <div className="stat-icon license-icon">
-              ✓
-            </div>
-
-            <div>
-              <p>Active Licenses</p>
-              <h2>32</h2>
-              <span className="positive">All up to date</span>
-            </div>
-
-          </div>
+          {message && <div className="message">{message}</div>}
 
         </section>
 
+        <section className="table-section">
 
-        {/* Main Dashboard Grid */}
-        <section className="dashboard-grid">
+          <h2>Registered Products</h2>
 
-          {/* Recent Transactions */}
-          <div className="dashboard-card transactions-card">
+          <table>
 
-            <div className="card-header">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Product Name</th>
+                <th>Category</th>
+                <th>Manufacturer</th>
+                <th>Country</th>
+                <th>License</th>
+                <th>Status</th>
+              </tr>
+            </thead>
 
-              <div>
-                <h2>Recent Transactions</h2>
-                <p>Latest import and export records</p>
-              </div>
+            <tbody>
 
-              <button className="view-button">
-                View All
-              </button>
+              {products.map((product) => (
+                <tr key={product.id}>
 
-            </div>
+                  <td>{product.id}</td>
+                  <td>{product.productName}</td>
+                  <td>{product.category}</td>
+                  <td>{product.manufacturer}</td>
+                  <td>{product.countryOfOrigin}</td>
+                  <td>{product.licenseNumber}</td>
 
+                  <td>
+                    <span
+                      className={`status ${
+                        product.status === "Active"
+                          ? "active"
+                          : "inactive"
+                      }`}
+                    >
+                      {product.status}
+                    </span>
+                  </td>
 
-            <div className="table-container">
+                </tr>
+              ))}
 
-              <table>
+            </tbody>
 
-                <thead>
-                  <tr>
-                    <th>Reference</th>
-                    <th>Type</th>
-                    <th>Date</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-
-                  <tr>
-                    <td>IMP-2026-001</td>
-                    <td>Import</td>
-                    <td>03 Oct 2026</td>
-                    <td>
-                      <span className="status approved">
-                        Approved
-                      </span>
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <td>EXP-2026-014</td>
-                    <td>Export</td>
-                    <td>02 Oct 2026</td>
-                    <td>
-                      <span className="status pending">
-                        Pending
-                      </span>
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <td>IMP-2026-002</td>
-                    <td>Import</td>
-                    <td>01 Oct 2026</td>
-                    <td>
-                      <span className="status review">
-                        Under Review
-                      </span>
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <td>EXP-2026-013</td>
-                    <td>Export</td>
-                    <td>30 Sep 2026</td>
-                    <td>
-                      <span className="status approved">
-                        Approved
-                      </span>
-                    </td>
-                  </tr>
-
-                </tbody>
-
-              </table>
-
-            </div>
-
-          </div>
-
-
-          {/* Quick Actions */}
-          <div className="dashboard-card quick-card">
-
-            <div className="card-header">
-
-              <div>
-                <h2>Quick Actions</h2>
-                <p>Frequently used functions</p>
-              </div>
-
-            </div>
-
-
-            <div className="quick-actions">
-
-              <button className="action-button">
-                <span>＋</span>
-                <div>
-                  <strong>New Import Request</strong>
-                  <small>Create a new import record</small>
-                </div>
-              </button>
-
-
-              <button className="action-button">
-                <span>＋</span>
-                <div>
-                  <strong>New Export Request</strong>
-                  <small>Create a new export record</small>
-                </div>
-              </button>
-
-
-              <button className="action-button">
-                <span>▤</span>
-                <div>
-                  <strong>Upload Document</strong>
-                  <small>Add compliance documentation</small>
-                </div>
-              </button>
-
-
-              <button className="action-button">
-                <span>▥</span>
-                <div>
-                  <strong>Generate Report</strong>
-                  <small>Create management reports</small>
-                </div>
-              </button>
-
-            </div>
-
-          </div>
+          </table>
 
         </section>
-
-
-        {/* Footer */}
-        <footer className="footer">
-
-          <span>
-            © 2026 Global ARM Management System
-          </span>
-
-          <span>
-            System Status: <strong>Operational</strong>
-          </span>
-
-        </footer>
 
       </main>
 

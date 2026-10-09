@@ -1,4 +1,4 @@
-package global_arm_backend;
+package com.globalarm;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

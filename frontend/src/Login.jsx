@@ -1,107 +1,109 @@
+
 import { useState } from "react";
+import "./index.css";
 
 function Login({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("ADMIN");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setMessage("");
+    setLoading(true);
 
-    if (
-      username === "admin" &&
-      password === "admin123"
-    ) {
-      onLogin(role);
-    } else if (
-      username === "officer" &&
-      password === "officer123"
-    ) {
-      onLogin(role);
-    } else {
-      alert("Invalid username or password");
+    try {
+      const response = await fetch(
+        "http://localhost:8080/api/auth/login",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ username, password }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Invalid username or password."
+        );
+      }
+
+      if (data.role !== "ADMIN" && data.role !== "OFFICER") {
+        throw new Error("Your account role is not supported.");
+      }
+
+      onLogin(data.role);
+    } catch (error) {
+      setMessage(
+        error.message ||
+          "Unable to connect to the server. Check your backend."
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div className="login-page">
-
       <div className="login-card">
+        <div className="login-logo">GLOBAL ARM</div>
 
-        <div className="login-logo">
-          ARM
-        </div>
+        <h1>Welcome Back</h1>
+        <p>Sign in to Global ARM Management System</p>
 
-        <h1>Global ARM</h1>
-
-        <p className="login-subtitle">
-          Management System
-        </p>
-
-        <form onSubmit={handleLogin}>
-
+        <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Username</label>
-
+            <label htmlFor="username">Username</label>
             <input
+              id="username"
               type="text"
-              placeholder="Enter username"
               value={username}
-              onChange={(e) =>
-                setUsername(e.target.value)
-              }
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your username"
+              autoComplete="username"
               required
             />
           </div>
 
           <div className="form-group">
-            <label>Password</label>
-
+            <label htmlFor="password">Password</label>
             <input
+              id="password"
               type="password"
-              placeholder="Enter password"
               value={password}
-              onChange={(e) =>
-                setPassword(e.target.value)
-              }
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              autoComplete="current-password"
               required
             />
           </div>
 
-          <div className="form-group">
-            <label>Role</label>
-
-            <select
-              value={role}
-              onChange={(e) =>
-                setRole(e.target.value)
-              }
-            >
-              <option value="ADMIN">
-                Administrator
-              </option>
-
-              <option value="OFFICER">
-                Officer
-              </option>
-            </select>
-          </div>
+          {message && (
+            <div className="message" role="alert">
+              {message}
+            </div>
+          )}
 
           <button
-            className="login-btn"
+            className="btn login-btn"
             type="submit"
+            disabled={loading}
           >
-            Login
+            {loading ? "Signing in..." : "Sign In"}
           </button>
-
         </form>
 
-        <p className="login-info">
-          Authorized Access Only
-        </p>
-
+        <div className="login-info">
+          <strong>Development accounts</strong>
+          <p>Admin: admin / admin123</p>
+          <p>Officer: officer / officer123</p>
+        </div>
       </div>
-
     </div>
   );
 }

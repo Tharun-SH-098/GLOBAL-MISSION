@@ -18,6 +18,7 @@ function Login({ onLogin }) {
         "http://localhost:8080/api/auth/login",
         {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
           },
@@ -33,15 +34,11 @@ function Login({ onLogin }) {
         );
       }
 
-      if (data.role !== "ADMIN" && data.role !== "OFFICER") {
-        throw new Error("Your account role is not supported.");
-      }
-
-      onLogin(data.role);
+      onLogin(data.role, data.username);
     } catch (error) {
       setMessage(
         error.message ||
-          "Unable to connect to the server. Check your backend."
+          "Unable to connect to the server."
       );
     } finally {
       setLoading(false);
@@ -52,7 +49,6 @@ function Login({ onLogin }) {
     <div className="login-page">
       <div className="login-card">
         <div className="login-logo">GLOBAL ARM</div>
-
         <h1>Welcome Back</h1>
         <p>Sign in to Global ARM Management System</p>
 
@@ -61,11 +57,10 @@ function Login({ onLogin }) {
             <label htmlFor="username">Username</label>
             <input
               id="username"
-              type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter your username"
               autoComplete="username"
+              placeholder="Enter username"
               required
             />
           </div>
@@ -77,8 +72,8 @@ function Login({ onLogin }) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
               autoComplete="current-password"
+              placeholder="Enter password"
               required
             />
           </div>

@@ -2,11 +2,14 @@
 import { useEffect, useState } from "react";
 import "./index.css";
 import Login from "./Login";
-import AdminDashboard from "./admin/AdminDashboard";
+
+const API = "http://localhost:8080";
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [userRole, setUserRole] = useState("");
+  const [currentUsername, setCurrentUsername] = useState("");
+  const [checkingSession, setCheckingSession] = useState(true);
   const [currentPage, setCurrentPage] = useState("Dashboard");
   const [products, setProducts] = useState([]);
   const [message, setMessage] = useState("");
@@ -20,20 +23,63 @@ function App() {
     status: "Active",
   });
 
+  // Verify the existing server session when the app opens.
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkSession = async () => {
+      try {
+        const response = await fetch(`${API}/api/auth/me`, {
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json();
+
+        if (!cancelled) {
+          setUserRole(data.role);
+          setCurrentUsername(data.username);
+          setLoggedIn(true);
+        }
+      } catch (error) {
+        console.error("Session check failed:", error);
+      } finally {
+        if (!cancelled) {
+          setCheckingSession(false);
+        }
+      }
+    };
+
+    checkSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load products whenever a user is logged in.
   const loadProducts = async () => {
     try {
-      const response = await fetch(
-        "http://localhost:8080/api/products"
-      );
+      const response = await fetch(`${API}/api/products`, {
+        credentials: "include",
+      });
 
       if (!response.ok) {
-        throw new Error("Failed to load products");
+        throw new Error(
+          response.status === 401
+            ? "Your session has expired. Please log in again."
+            : "Could not load products."
+        );
       }
 
-      setProducts(await response.json());
+      const data = await response.json();
+      setProducts(data);
     } catch (error) {
-      console.error("Error loading products:", error);
-      setMessage("Unable to load products. Check the backend.");
+      console.error(error);
+      setMessage(error.message || "Unable to load products.");
     }
   };
 
@@ -50,27 +96,28 @@ function App() {
     });
   };
 
+  // Register a product in the backend database.
   const addProduct = async (e) => {
     e.preventDefault();
     setMessage("");
 
     try {
-      const response = await fetch(
-        "http://localhost:8080/api/products",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(formData),
-        }
-      );
+      const response = await fetch(`${API}/api/products`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formData),
+      });
 
-      if (!response.ok) {
-        throw new Error("Failed to add product");
+      if (response.status === 401) {
+        throw new Error("Your session has expired. Please log in again.");
       }
 
-      setMessage("Product registered successfully!");
+      if (!response.ok) {
+        throw new Error("Could not register product.");
+      }
 
       setFormData({
         productName: "",
@@ -81,26 +128,59 @@ function App() {
         status: "Active",
       });
 
+      setMessage("Product registered successfully!");
       await loadProducts();
     } catch (error) {
-      console.error("Error adding product:", error);
-      setMessage("Unable to register product.");
+      console.error(error);
+      setMessage(error.message || "Unable to register product.");
     }
   };
 
-  const handleLogin = (role) => {
+  const handleLogin = (role, username) => {
     setUserRole(role);
+    setCurrentUsername(username);
     setCurrentPage("Dashboard");
-    setLoggedIn(true);
     setMessage("");
+    setLoggedIn(true);
   };
 
-  const handleLogout = () => {
+  // Invalidate the backend session before returning to login.
+  const handleLogout = async () => {
+    try {
+      const response = await fetch(`${API}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error("Server logout could not be completed.");
+      }
+
+      setMessage("");
+    } catch (error) {
+      console.error("Logout failed:", error);
+      setMessage("Logout could not be confirmed. Please try again.");
+      return;
+    }
+
     setLoggedIn(false);
     setUserRole("");
+    setCurrentUsername("");
     setCurrentPage("Dashboard");
-    setMessage("");
+    setProducts([]);
   };
+
+  if (checkingSession) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-logo">GLOBAL ARM</div>
+          <h2>Checking your session...</h2>
+          <p>Please wait.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!loggedIn) {
     return <Login onLogin={handleLogin} />;
@@ -111,6 +191,23 @@ function App() {
   ).length;
 
   const inactiveProducts = products.length - activeProducts;
+
+  // Demonstration users only; database-backed user management
+  // will be implemented separately.
+  const demoUsers = [
+    {
+      id: 1,
+      username: "admin",
+      role: "Administrator",
+      status: "Active",
+    },
+    {
+      id: 2,
+      username: "officer",
+      role: "Officer",
+      status: "Active",
+    },
+  ];
 
   const navItems = [
     { name: "Dashboard", icon: "▦" },
@@ -123,6 +220,32 @@ function App() {
         ]
       : []),
   ];
+
+  const renderStats = () => (
+    <section className="dashboard">
+      <div className="card total">
+        <h3>Total Products</h3>
+        <div className="number">{products.length}</div>
+      </div>
+
+      <div className="card active">
+        <h3>Active Products</h3>
+        <div className="number">{activeProducts}</div>
+      </div>
+
+      <div className="card pending">
+        <h3>Inactive Products</h3>
+        <div className="number">{inactiveProducts}</div>
+      </div>
+
+      <div className="card">
+        <h3>System Status</h3>
+        <div className="number" style={{ color: "#16a34a" }}>
+          Online
+        </div>
+      </div>
+    </section>
+  );
 
   const renderProducts = () => (
     <>
@@ -204,7 +327,11 @@ function App() {
           </button>
         </form>
 
-        {message && <div className="message">{message}</div>}
+        {message && (
+          <div className="message" role="status">
+            {message}
+          </div>
+        )}
       </section>
 
       <section className="table-section">
@@ -257,33 +384,103 @@ function App() {
     </>
   );
 
+  const renderUsers = () => (
+    <section className="table-section">
+      <h2>User Management</h2>
+      <p style={{ color: "#64748b" }}>
+        Demonstration account list.
+      </p>
+
+      <section className="dashboard">
+        <div className="card total">
+          <h3>Total Users</h3>
+          <div className="number">{demoUsers.length}</div>
+        </div>
+
+        <div className="card active">
+          <h3>Active Users</h3>
+          <div className="number">
+            {demoUsers.filter(
+              (user) => user.status === "Active"
+            ).length}
+          </div>
+        </div>
+      </section>
+
+      <div style={{ overflowX: "auto" }}>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Username</th>
+              <th>Role</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {demoUsers.map((user) => (
+              <tr key={user.id}>
+                <td>{user.id}</td>
+                <td>{user.username}</td>
+                <td>{user.role}</td>
+                <td>
+                  <span className="status active">
+                    {user.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p style={{ color: "#64748b", marginTop: "20px" }}>
+        These records are hardcoded examples, not database-backed users.
+      </p>
+    </section>
+  );
+
   const renderPage = () => {
     switch (currentPage) {
       case "Dashboard":
-        if (userRole === "ADMIN") {
-          return <AdminDashboard products={products} />;
-        }
-
         return (
           <>
-            <h2>Officer Dashboard</h2>
-            <p>Monitor registered product records.</p>
+            <h2>
+              {userRole === "ADMIN"
+                ? "Administrator Dashboard"
+                : "Officer Dashboard"}
+            </h2>
 
-            <section className="dashboard">
-              <div className="card total">
-                <h3>Total Products</h3>
-                <div className="number">{products.length}</div>
-              </div>
+            <p style={{ color: "#64748b" }}>
+              Welcome to Global ARM Management System.
+            </p>
 
-              <div className="card active">
-                <h3>Active Products</h3>
-                <div className="number">{activeProducts}</div>
-              </div>
+            {renderStats()}
 
-              <div className="card pending">
-                <h3>Inactive Products</h3>
-                <div className="number">{inactiveProducts}</div>
-              </div>
+            <section className="table-section">
+              <h3>
+                {userRole === "ADMIN"
+                  ? "Administrator Responsibilities"
+                  : "Officer Workspace"}
+              </h3>
+
+              <ul>
+                {userRole === "ADMIN" ? (
+                  <>
+                    <li>Monitor registered products</li>
+                    <li>Review product reports</li>
+                    <li>View system account information</li>
+                    <li>Configure system settings</li>
+                  </>
+                ) : (
+                  <>
+                    <li>View registered products</li>
+                    <li>Register product records</li>
+                    <li>Review product reports</li>
+                  </>
+                )}
+              </ul>
             </section>
           </>
         );
@@ -293,55 +490,36 @@ function App() {
 
       case "Reports":
         return (
-          <section className="table-section">
+          <>
             <h2>Product Reports</h2>
-            <p>Summary of registered product records.</p>
-
-            <div className="dashboard">
-              <div className="card total">
-                <h3>Total Records</h3>
-                <div className="number">{products.length}</div>
-              </div>
-
-              <div className="card active">
-                <h3>Active Records</h3>
-                <div className="number">{activeProducts}</div>
-              </div>
-
-              <div className="card pending">
-                <h3>Inactive Records</h3>
-                <div className="number">{inactiveProducts}</div>
-              </div>
-            </div>
-          </section>
+            <p style={{ color: "#64748b" }}>
+              Summary of registered product records.
+            </p>
+            {renderStats()}
+          </>
         );
 
       case "Users":
-        return userRole === "ADMIN" ? (
-          <section className="table-section">
-            <h2>User Management</h2>
-            <p>Administrator access</p>
-            <p>
-              User account creation and management will be
-              connected to the backend in a later step.
-            </p>
-          </section>
-        ) : null;
+        return userRole === "ADMIN"
+          ? renderUsers()
+          : <p>You do not have permission to access this page.</p>;
 
       case "Settings":
         return userRole === "ADMIN" ? (
           <section className="table-section">
             <h2>System Settings</h2>
-            <p>Global ARM application settings.</p>
+            <p>Global ARM application configuration.</p>
             <p>
-              Configuration options will be implemented
-              in a later step.
+              Advanced settings will be implemented in a later
+              development phase.
             </p>
           </section>
-        ) : null;
+        ) : (
+          <p>You do not have permission to access this page.</p>
+        );
 
       default:
-        return <h2>Page not found</h2>;
+        return <p>Select a page from the sidebar.</p>;
     }
   };
 
@@ -358,9 +536,11 @@ function App() {
             display: "flex",
             alignItems: "center",
             gap: "12px",
+            flexWrap: "wrap",
           }}
         >
           <span className="header-badge">
+            {currentUsername} ·{" "}
             {userRole === "ADMIN" ? "Administrator" : "Officer"}
           </span>
 
@@ -407,15 +587,11 @@ function App() {
         <main className="dashboard-content">
           <div style={{ marginBottom: "25px" }}>
             <h2>
-              {currentPage === "Dashboard"
-                ? `Welcome, ${
-                    userRole === "ADMIN" ? "Administrator" : "Officer"
-                  }`
-                : currentPage}
+              Welcome,{" "}
+              {userRole === "ADMIN" ? "Administrator" : "Officer"}
             </h2>
-
-            <p style={{ color: "#64748b", marginTop: "5px" }}>
-              Manage and monitor registered products from your workspace.
+            <p style={{ color: "#64748b" }}>
+              Manage and monitor your workspace.
             </p>
           </div>
 

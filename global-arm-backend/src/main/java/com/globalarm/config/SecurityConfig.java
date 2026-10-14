@@ -4,9 +4,9 @@ package com.globalarm.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -44,16 +44,32 @@ public class SecurityConfig {
 
         http
             .cors(Customizer.withDefaults())
-            // Temporary for development; add CSRF protection before deployment.
+
+            // CSRF is disabled for local development only.
+            // Enable CSRF protection before production deployment.
             .csrf(csrf -> csrf.disable())
+
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/login", "/api/auth/logout")
-                .permitAll()
+                // Login and logout endpoints
+                .requestMatchers(
+                    "/api/auth/login",
+                    "/api/auth/logout"
+                ).permitAll()
+
+                // Only administrators can manage users
+                .requestMatchers("/api/admin/users/**")
+                .hasRole("ADMIN")
+
+                // All remaining endpoints require authentication
                 .anyRequest().authenticated()
             )
+
             .sessionManagement(session ->
-                session.sessionFixation(fixation -> fixation.changeSessionId())
+                session.sessionFixation(
+                    fixation -> fixation.changeSessionId()
+                )
             )
+
             .securityContext(context ->
                 context.securityContextRepository(
                     securityContextRepository()
@@ -65,6 +81,7 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+
         CorsConfiguration configuration = new CorsConfiguration();
 
         configuration.setAllowedOrigins(
@@ -72,16 +89,28 @@ public class SecurityConfig {
         );
 
         configuration.setAllowedMethods(
-            List.of("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            List.of(
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE",
+                "OPTIONS"
+            )
         );
 
-        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowedHeaders(
+            List.of("*")
+        );
+
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source =
             new UrlBasedCorsConfigurationSource();
 
-        source.registerCorsConfiguration("/**", configuration);
+        source.registerCorsConfiguration(
+            "/**",
+            configuration
+        );
 
         return source;
     }

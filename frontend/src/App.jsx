@@ -1,9 +1,24 @@
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./index.css";
 import Login from "./Login";
 
 const API = "http://localhost:8080";
+
+const emptyProductForm = {
+  productName: "",
+  category: "",
+  manufacturer: "",
+  countryOfOrigin: "",
+  licenseNumber: "",
+  status: "Active",
+};
+
+const emptyUserForm = {
+  username: "",
+  password: "",
+  role: "OFFICER",
+};
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -11,19 +26,20 @@ function App() {
   const [currentUsername, setCurrentUsername] = useState("");
   const [checkingSession, setCheckingSession] = useState(true);
   const [currentPage, setCurrentPage] = useState("Dashboard");
+
   const [products, setProducts] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState("");
+  const [userForm, setUserForm] = useState(emptyUserForm);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [updatingUserId, setUpdatingUserId] = useState(null);
+
+  const [formData, setFormData] = useState(emptyProductForm);
   const [message, setMessage] = useState("");
+  const [userMessage, setUserMessage] = useState("");
 
-  const [formData, setFormData] = useState({
-    productName: "",
-    category: "",
-    manufacturer: "",
-    countryOfOrigin: "",
-    licenseNumber: "",
-    status: "Active",
-  });
-
-  // Verify the existing server session when the app opens.
+  // Check the existing server session.
   useEffect(() => {
     let cancelled = false;
 
@@ -33,9 +49,7 @@ function App() {
           credentials: "include",
         });
 
-        if (!response.ok) {
-          return;
-        }
+        if (!response.ok) return;
 
         const data = await response.json();
 
@@ -60,45 +74,91 @@ function App() {
     };
   }, []);
 
-  // Load products whenever a user is logged in.
-  const loadProducts = async () => {
+  // Load registered products.
+  const loadProducts = useCallback(async () => {
     try {
       const response = await fetch(`${API}/api/products`, {
         credentials: "include",
       });
 
+      if (response.status === 401) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
       if (!response.ok) {
-        throw new Error(
-          response.status === 401
-            ? "Your session has expired. Please log in again."
-            : "Could not load products."
-        );
+        throw new Error("Could not load products.");
       }
 
       const data = await response.json();
       setProducts(data);
     } catch (error) {
-      console.error(error);
+      console.error("Product loading failed:", error);
       setMessage(error.message || "Unable to load products.");
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (loggedIn) {
       loadProducts();
     }
-  }, [loggedIn]);
+  }, [loggedIn, loadProducts]);
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+  // Load actual user records from MySQL through Spring Boot.
+  const loadUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError("");
+
+    try {
+      const response = await fetch(`${API}/api/admin/users`, {
+        method: "GET",
+        credentials: "include",
+      });
+
+      if (response.status === 401) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
+      if (response.status === 403) {
+        throw new Error("Only administrators can manage users.");
+      }
+
+      if (!response.ok) {
+        throw new Error("Unable to load users from the database.");
+      }
+
+      const data = await response.json();
+      setUsers(data);
+    } catch (error) {
+      console.error("User loading failed:", error);
+      setUsersError(error.message || "Unable to load users.");
+    } finally {
+      setUsersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      loggedIn &&
+      userRole === "ADMIN" &&
+      currentPage === "Users"
+    ) {
+      loadUsers();
+    }
+  }, [loggedIn, userRole, currentPage, loadUsers]);
+
+  // Handle product form fields.
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+
+    setFormData((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
   };
 
-  // Register a product in the backend database.
-  const addProduct = async (e) => {
-    e.preventDefault();
+  // Register a product.
+  const addProduct = async (event) => {
+    event.preventDefault();
     setMessage("");
 
     try {
@@ -119,32 +179,157 @@ function App() {
         throw new Error("Could not register product.");
       }
 
-      setFormData({
-        productName: "",
-        category: "",
-        manufacturer: "",
-        countryOfOrigin: "",
-        licenseNumber: "",
-        status: "Active",
-      });
-
+      setFormData({ ...emptyProductForm });
       setMessage("Product registered successfully!");
       await loadProducts();
     } catch (error) {
-      console.error(error);
+      console.error("Product registration failed:", error);
       setMessage(error.message || "Unable to register product.");
     }
   };
 
-  const handleLogin = (role, username) => {
-    setUserRole(role);
-    setCurrentUsername(username);
-    setCurrentPage("Dashboard");
-    setMessage("");
-    setLoggedIn(true);
+  // Handle user creation form fields.
+  const handleUserFormChange = (event) => {
+    const { name, value } = event.target;
+
+    setUserForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
   };
 
-  // Invalidate the backend session before returning to login.
+  // Create a user using the existing POST API.
+  const createUser = async (event) => {
+    event.preventDefault();
+    setUserMessage("");
+    setUsersError("");
+
+    const username = userForm.username.trim();
+
+    if (!username) {
+      setUserMessage("Please enter a username.");
+      return;
+    }
+
+    if (userForm.password.length < 8) {
+      setUserMessage("Password must contain at least 8 characters.");
+      return;
+    }
+
+    setCreatingUser(true);
+
+    try {
+      const response = await fetch(`${API}/api/admin/users`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username,
+          password: userForm.password,
+          role: userForm.role,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
+      if (response.status === 403) {
+        throw new Error("Only administrators can create users.");
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            data.message ||
+            (response.status === 409
+              ? "Username already exists."
+              : "Unable to create user.")
+        );
+      }
+
+      setUserForm({ ...emptyUserForm });
+      setUserMessage(`User "${data.username}" created successfully!`);
+
+      await loadUsers();
+    } catch (error) {
+      console.error("User creation failed:", error);
+      setUserMessage(error.message || "Unable to create user.");
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  // Activate or deactivate an account.
+  const toggleUserStatus = async (user) => {
+    if (user.username === currentUsername) {
+      setUserMessage("You cannot change your own account status here.");
+      return;
+    }
+
+    const nextActiveStatus = !user.active;
+
+    const confirmed = window.confirm(
+      `${nextActiveStatus ? "Activate" : "Deactivate"} account "${user.username}"?`
+    );
+
+    if (!confirmed) return;
+
+    setUserMessage("");
+    setUsersError("");
+    setUpdatingUserId(user.id);
+
+    try {
+      const response = await fetch(
+        `${API}/api/admin/users/${user.id}/status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            active: nextActiveStatus,
+          }),
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        throw new Error("Your session has expired. Please log in again.");
+      }
+
+      if (response.status === 403) {
+        throw new Error("Only administrators can update user status.");
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || data.message || "Unable to update account status."
+        );
+      }
+
+      setUserMessage(
+        `Account "${user.username}" ${
+          nextActiveStatus ? "activated" : "deactivated"
+        } successfully.`
+      );
+
+      await loadUsers();
+    } catch (error) {
+      console.error("Account status update failed:", error);
+      setUserMessage(error.message || "Unable to update account status.");
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  // Invalidate the backend session.
   const handleLogout = async () => {
     try {
       const response = await fetch(`${API}/api/auth/logout`, {
@@ -155,8 +340,6 @@ function App() {
       if (!response.ok) {
         throw new Error("Server logout could not be completed.");
       }
-
-      setMessage("");
     } catch (error) {
       console.error("Logout failed:", error);
       setMessage("Logout could not be confirmed. Please try again.");
@@ -168,6 +351,18 @@ function App() {
     setCurrentUsername("");
     setCurrentPage("Dashboard");
     setProducts([]);
+    setUsers([]);
+    setMessage("");
+    setUserMessage("");
+    setUsersError("");
+  };
+
+  const handleLogin = (role, username) => {
+    setUserRole(role);
+    setCurrentUsername(username);
+    setCurrentPage("Dashboard");
+    setMessage("");
+    setLoggedIn(true);
   };
 
   if (checkingSession) {
@@ -192,22 +387,8 @@ function App() {
 
   const inactiveProducts = products.length - activeProducts;
 
-  // Demonstration users only; database-backed user management
-  // will be implemented separately.
-  const demoUsers = [
-    {
-      id: 1,
-      username: "admin",
-      role: "Administrator",
-      status: "Active",
-    },
-    {
-      id: 2,
-      username: "officer",
-      role: "Officer",
-      status: "Active",
-    },
-  ];
+  const activeUsers = users.filter((user) => user.active).length;
+  const inactiveUsers = users.length - activeUsers;
 
   const navItems = [
     { name: "Dashboard", icon: "▦" },
@@ -366,9 +547,7 @@ function App() {
                     <td>
                       <span
                         className={`status ${
-                          product.status === "Active"
-                            ? "active"
-                            : "inactive"
+                          product.status === "Active" ? "active" : "inactive"
                         }`}
                       >
                         {product.status}
@@ -385,60 +564,219 @@ function App() {
   );
 
   const renderUsers = () => (
-    <section className="table-section">
-      <h2>User Management</h2>
-      <p style={{ color: "#64748b" }}>
-        Demonstration account list.
-      </p>
+    <>
+      <section className="form-section">
+        <h2>Create New User</h2>
+        <p style={{ color: "#64748b" }}>
+          Add an account to the Global ARM database.
+        </p>
 
-      <section className="dashboard">
-        <div className="card total">
-          <h3>Total Users</h3>
-          <div className="number">{demoUsers.length}</div>
-        </div>
+        <form onSubmit={createUser}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label htmlFor="newUsername">Username</label>
+              <input
+                id="newUsername"
+                name="username"
+                value={userForm.username}
+                onChange={handleUserFormChange}
+                placeholder="Enter username"
+                maxLength={50}
+                autoComplete="off"
+                required
+              />
+            </div>
 
-        <div className="card active">
-          <h3>Active Users</h3>
-          <div className="number">
-            {demoUsers.filter(
-              (user) => user.status === "Active"
-            ).length}
+            <div className="form-group">
+              <label htmlFor="newPassword">Password</label>
+              <input
+                id="newPassword"
+                type="password"
+                name="password"
+                value={userForm.password}
+                onChange={handleUserFormChange}
+                placeholder="At least 8 characters"
+                minLength={8}
+                maxLength={72}
+                autoComplete="new-password"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="newRole">Account Role</label>
+              <select
+                id="newRole"
+                name="role"
+                value={userForm.role}
+                onChange={handleUserFormChange}
+              >
+                <option value="OFFICER">Officer</option>
+                <option value="ADMIN">Administrator</option>
+              </select>
+            </div>
           </div>
-        </div>
+
+          <button className="btn" type="submit" disabled={creatingUser}>
+            {creatingUser ? "Creating Account..." : "+ Create User"}
+          </button>
+        </form>
+
+        {userMessage && (
+          <p
+            role="status"
+            style={{
+              marginTop: "16px",
+              color: /successfully/i.test(userMessage)
+                ? "#15803d"
+                : "#b91c1c",
+            }}
+          >
+            {userMessage}
+          </p>
+        )}
       </section>
 
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Username</th>
-              <th>Role</th>
-              <th>Status</th>
-            </tr>
-          </thead>
+      <section className="table-section">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "12px",
+            marginBottom: "20px",
+          }}
+        >
+          <div>
+            <h2>User Accounts</h2>
+            <p style={{ color: "#64748b" }}>
+              Live records retrieved from MySQL.
+            </p>
+          </div>
 
-          <tbody>
-            {demoUsers.map((user) => (
-              <tr key={user.id}>
-                <td>{user.id}</td>
-                <td>{user.username}</td>
-                <td>{user.role}</td>
-                <td>
-                  <span className="status active">
-                    {user.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <button
+            className="btn"
+            type="button"
+            onClick={loadUsers}
+            disabled={usersLoading}
+          >
+            {usersLoading ? "Loading..." : "Refresh Users"}
+          </button>
+        </div>
 
-      <p style={{ color: "#64748b", marginTop: "20px" }}>
-        These records are hardcoded examples, not database-backed users.
-      </p>
-    </section>
+        <section className="dashboard">
+          <div className="card total">
+            <h3>Total Users</h3>
+            <div className="number">{users.length}</div>
+          </div>
+
+          <div className="card active">
+            <h3>Active Users</h3>
+            <div className="number">{activeUsers}</div>
+          </div>
+
+          <div className="card pending">
+            <h3>Inactive Users</h3>
+            <div className="number">{inactiveUsers}</div>
+          </div>
+        </section>
+
+        {usersError && (
+          <p role="alert" style={{ color: "#dc2626" }}>
+            {usersError}
+          </p>
+        )}
+
+        {usersLoading ? (
+          <p>Loading users from the database...</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {users.length === 0 ? (
+                  <tr>
+                    <td colSpan="5">
+                      {usersError
+                        ? "Users could not be loaded."
+                        : "No users found."}
+                    </td>
+                  </tr>
+                ) : (
+                  users.map((user) => (
+                    <tr key={user.id}>
+                      <td>{user.id}</td>
+                      <td>{user.username}</td>
+                      <td>
+                        {user.role === "ADMIN"
+                          ? "Administrator"
+                          : "Officer"}
+                      </td>
+                      <td>
+                        <span
+                          className={`status ${
+                            user.active ? "active" : "inactive"
+                          }`}
+                        >
+                          {user.active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          disabled={
+                            updatingUserId === user.id ||
+                            user.username === currentUsername
+                          }
+                          onClick={() => toggleUserStatus(user)}
+                          style={{
+                            padding: "8px 12px",
+                            border: "none",
+                            borderRadius: "6px",
+                            cursor:
+                              updatingUserId === user.id ||
+                              user.username === currentUsername
+                                ? "not-allowed"
+                                : "pointer",
+                            color: "white",
+                            background: user.active ? "#dc2626" : "#16a34a",
+                            opacity:
+                              updatingUserId === user.id ||
+                              user.username === currentUsername
+                                ? 0.55
+                                : 1,
+                          }}
+                        >
+                          {updatingUserId === user.id
+                            ? "Updating..."
+                            : user.active
+                              ? "Deactivate"
+                              : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p style={{ color: "#64748b", marginTop: "16px" }}>
+          You cannot change your own account status from this page.
+        </p>
+      </section>
+    </>
   );
 
   const renderPage = () => {
@@ -470,7 +808,7 @@ function App() {
                   <>
                     <li>Monitor registered products</li>
                     <li>Review product reports</li>
-                    <li>View system account information</li>
+                    <li>Manage user accounts</li>
                     <li>Configure system settings</li>
                   </>
                 ) : (
@@ -500,9 +838,11 @@ function App() {
         );
 
       case "Users":
-        return userRole === "ADMIN"
-          ? renderUsers()
-          : <p>You do not have permission to access this page.</p>;
+        return userRole === "ADMIN" ? (
+          renderUsers()
+        ) : (
+          <p>You do not have permission to access this page.</p>
+        );
 
       case "Settings":
         return userRole === "ADMIN" ? (
@@ -510,8 +850,8 @@ function App() {
             <h2>System Settings</h2>
             <p>Global ARM application configuration.</p>
             <p>
-              Advanced settings will be implemented in a later
-              development phase.
+              Advanced settings will be implemented in a later development
+              phase.
             </p>
           </section>
         ) : (
@@ -574,11 +914,10 @@ function App() {
               onClick={() => {
                 setCurrentPage(item.name);
                 setMessage("");
+                setUserMessage("");
               }}
             >
-              <span style={{ marginRight: "10px" }}>
-                {item.icon}
-              </span>
+              <span style={{ marginRight: "10px" }}>{item.icon}</span>
               {item.name}
             </button>
           ))}

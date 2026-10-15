@@ -4,6 +4,7 @@ package com.globalarm.controller;
 import com.globalarm.model.User;
 import com.globalarm.repository.UserRepository;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,7 +48,8 @@ public class UserController {
     public UserResponse createUser(
             @RequestBody CreateUserRequest request) {
 
-        if (request.username() == null
+        if (request == null
+                || request.username() == null
                 || request.username().isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -94,7 +96,8 @@ public class UserController {
 
         User user = new User();
         user.setUsername(username);
-        user.setPassword(passwordEncoder.encode(request.password()));
+        user.setPassword(
+                passwordEncoder.encode(request.password()));
         user.setRole(role);
         user.setActive(true);
 
@@ -103,16 +106,58 @@ public class UserController {
         return toResponse(savedUser);
     }
 
-    // Activate or deactivate an existing account.
+    // Activate or deactivate an existing account safely.
     @PatchMapping("/{id}/status")
     public UserResponse updateUserStatus(
             @PathVariable Long id,
-            @RequestBody UpdateStatusRequest request) {
+            @RequestBody UpdateStatusRequest request,
+            Authentication authentication) {
+
+        if (request == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Status request is required.");
+        }
+
+        if (authentication == null
+                || !authentication.isAuthenticated()) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Please log in first.");
+        }
 
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "User not found."));
+
+        // Prevent deactivating your own account.
+        if (!request.active()
+                && user.getUsername().equals(
+                        authentication.getName())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "You cannot deactivate your own account.");
+        }
+
+        // Prevent deactivating the last active administrator.
+        if (!request.active()
+                && "ADMIN".equalsIgnoreCase(user.getRole())
+                && user.isActive()) {
+
+            long activeAdmins = userRepository.findAll()
+                    .stream()
+                    .filter(u -> u.isActive())
+                    .filter(u -> "ADMIN".equalsIgnoreCase(
+                            u.getRole()))
+                    .count();
+
+            if (activeAdmins <= 1) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "You cannot deactivate the last active administrator.");
+            }
+        }
 
         user.setActive(request.active());
 
@@ -121,6 +166,7 @@ public class UserController {
         return toResponse(savedUser);
     }
 
+    // Convert the entity to a safe response.
     private UserResponse toResponse(User user) {
         return new UserResponse(
                 user.getId(),

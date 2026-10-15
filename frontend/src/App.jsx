@@ -5,20 +5,35 @@ import Login from "./Login";
 
 const API = "http://localhost:8080";
 
-const emptyProductForm = {
-  productName: "",
-  category: "",
-  manufacturer: "",
-  countryOfOrigin: "",
-  licenseNumber: "",
-  status: "Active",
+const EMPTY_IMPORT = {
+  reference: "",
+  supplier: "",
+  country: "",
+  status: "Pending",
 };
 
-const emptyUserForm = {
-  username: "",
-  password: "",
-  role: "OFFICER",
+const IMPORT_STATUSES = [
+  "Pending",
+  "In Transit",
+  "Completed",
+  "Rejected",
+];
+
+const EMPTY_EXPORT = {
+  reference: "",
+  productName: "",
+  destinationCountry: "",
+  quantity: "",
+  status: "Pending",
 };
+
+const EXPORT_STATUSES = [
+  "Pending",
+  "Processing",
+  "Shipped",
+  "Delivered",
+  "Rejected",
+];
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -31,19 +46,53 @@ function App() {
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState("");
-  const [userForm, setUserForm] = useState(emptyUserForm);
-  const [creatingUser, setCreatingUser] = useState(false);
-  const [updatingUserId, setUpdatingUserId] = useState(null);
-
-  const [formData, setFormData] = useState(emptyProductForm);
-  const [message, setMessage] = useState("");
   const [userMessage, setUserMessage] = useState("");
+  const [userActionId, setUserActionId] = useState(null);
 
-  // Check the existing server session.
+  const [userForm, setUserForm] = useState({
+    username: "",
+    password: "",
+    role: "OFFICER",
+  });
+
+  const [message, setMessage] = useState("");
+
+  const [formData, setFormData] = useState({
+    productName: "",
+    category: "",
+    manufacturer: "",
+    countryOfOrigin: "",
+    licenseNumber: "",
+    status: "Active",
+  });
+
+  // Import Management state
+  const [imports, setImports] = useState([]);
+  const [importsLoading, setImportsLoading] = useState(false);
+  const [importSaving, setImportSaving] = useState(false);
+  const [importActionId, setImportActionId] = useState(null);
+  const [importError, setImportError] = useState("");
+  const [importMessage, setImportMessage] = useState("");
+  const [importForm, setImportForm] = useState({ ...EMPTY_IMPORT });
+
+  // Export Management state
+  const [exports, setExports] = useState([]);
+  const [exportsLoading, setExportsLoading] = useState(false);
+  const [exportSaving, setExportSaving] = useState(false);
+  const [exportActionId, setExportActionId] = useState(null);
+  const [exportError, setExportError] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
+  const [exportForm, setExportForm] = useState({ ...EMPTY_EXPORT });
+
+  const [documentReference, setDocumentReference] = useState("");
+  const [complianceStatus, setComplianceStatus] =
+    useState("Pending Review");
+
+  // Check login session.
   useEffect(() => {
     let cancelled = false;
 
-    const checkSession = async () => {
+    async function checkSession() {
       try {
         const response = await fetch(`${API}/api/auth/me`, {
           credentials: "include",
@@ -53,7 +102,7 @@ function App() {
 
         const data = await response.json();
 
-        if (!cancelled) {
+        if (!cancelled && data.username && data.role) {
           setUserRole(data.role);
           setCurrentUsername(data.username);
           setLoggedIn(true);
@@ -61,11 +110,9 @@ function App() {
       } catch (error) {
         console.error("Session check failed:", error);
       } finally {
-        if (!cancelled) {
-          setCheckingSession(false);
-        }
+        if (!cancelled) setCheckingSession(false);
       }
-    };
+    }
 
     checkSession();
 
@@ -74,86 +121,372 @@ function App() {
     };
   }, []);
 
-  // Load registered products.
+  // Load products.
   const loadProducts = useCallback(async () => {
     try {
       const response = await fetch(`${API}/api/products`, {
         credentials: "include",
       });
 
-      if (response.status === 401) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
       if (!response.ok) {
-        throw new Error("Could not load products.");
+        throw new Error(
+          response.status === 401
+            ? "Session expired. Please log in again."
+            : `Could not load products (HTTP ${response.status}).`
+        );
       }
 
-      const data = await response.json();
-      setProducts(data);
+      setProducts(await response.json());
     } catch (error) {
       console.error("Product loading failed:", error);
-      setMessage(error.message || "Unable to load products.");
+      setMessage(error.message);
     }
   }, []);
 
   useEffect(() => {
-    if (loggedIn) {
-      loadProducts();
-    }
+    if (loggedIn) loadProducts();
   }, [loggedIn, loadProducts]);
 
-  // Load actual user records from MySQL through Spring Boot.
+  // Load imports.
+  const loadImports = useCallback(async () => {
+    setImportsLoading(true);
+    setImportError("");
+
+    try {
+      const response = await fetch(`${API}/api/imports`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Session expired. Please log in again."
+            : response.status === 403
+              ? "Access denied. Check your account permissions."
+              : `Could not load imports (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setImports(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Import loading failed:", error);
+      setImportError(error.message || "Could not load imports.");
+    } finally {
+      setImportsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn && currentPage === "Import Management") {
+      loadImports();
+    }
+  }, [loggedIn, currentPage, loadImports]);
+
+  // Register an import.
+  const addImport = async (event) => {
+    event.preventDefault();
+    setImportError("");
+    setImportMessage("");
+    setImportSaving(true);
+
+    try {
+      const response = await fetch(`${API}/api/imports`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(importForm),
+      });
+
+      if (!response.ok) {
+        const details = await response.text();
+        throw new Error(
+          details || `Import registration failed (HTTP ${response.status}).`
+        );
+      }
+
+      const saved = await response.json();
+      setImportForm({ ...EMPTY_IMPORT });
+      setImportMessage(`Import ${saved.reference} saved successfully.`);
+      await loadImports();
+    } catch (error) {
+      console.error("Import registration failed:", error);
+      setImportError(error.message || "Could not save import.");
+    } finally {
+      setImportSaving(false);
+    }
+  };
+
+  // Update import status.
+  const updateImportStatus = async (record, status) => {
+    if (importActionId !== null) return;
+
+    setImportActionId(record.id);
+    setImportError("");
+    setImportMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/imports/${record.id}/status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Status update failed (HTTP ${response.status}).`
+        );
+      }
+
+      setImportMessage(`Import ${record.reference} updated to ${status}.`);
+      await loadImports();
+    } catch (error) {
+      console.error("Import status update failed:", error);
+      setImportError(error.message || "Could not update import status.");
+    } finally {
+      setImportActionId(null);
+    }
+  };
+
+  // Delete import.
+  const deleteImport = async (record) => {
+    if (importActionId !== null) return;
+
+    if (!window.confirm(`Delete import ${record.reference}?`)) return;
+
+    setImportActionId(record.id);
+    setImportError("");
+    setImportMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/imports/${record.id}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Delete failed (HTTP ${response.status}).`
+        );
+      }
+
+      setImportMessage(`Import ${record.reference} deleted successfully.`);
+      await loadImports();
+    } catch (error) {
+      console.error("Import deletion failed:", error);
+      setImportError(error.message || "Could not delete import.");
+    } finally {
+      setImportActionId(null);
+    }
+  };
+
+  // Load exports from the database.
+  const loadExports = useCallback(async () => {
+    setExportsLoading(true);
+    setExportError("");
+
+    try {
+      const response = await fetch(`${API}/api/exports`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Session expired. Please log in again."
+            : response.status === 403
+              ? "Access denied. Check your account permissions."
+              : `Could not load exports (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setExports(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Export loading failed:", error);
+      setExportError(error.message || "Could not load exports.");
+    } finally {
+      setExportsLoading(false);
+    }
+  }, []);
+
+  // Load exports when Export Management opens.
+  useEffect(() => {
+    if (loggedIn && currentPage === "Export Management") {
+      loadExports();
+    }
+  }, [loggedIn, currentPage, loadExports]);
+
+  // Register an export in MySQL.
+  const addExport = async (event) => {
+    event.preventDefault();
+    setExportError("");
+    setExportMessage("");
+    setExportSaving(true);
+
+    try {
+      const payload = {
+        ...exportForm,
+        reference: exportForm.reference.trim(),
+        productName: exportForm.productName.trim(),
+        destinationCountry: exportForm.destinationCountry.trim(),
+        quantity: Number(exportForm.quantity),
+      };
+
+      const response = await fetch(`${API}/api/exports`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let details = "";
+        try {
+          const body = await response.json();
+          details = body.message || JSON.stringify(body);
+        } catch {
+          details = await response.text();
+        }
+
+        throw new Error(
+          details || `Export registration failed (HTTP ${response.status}).`
+        );
+      }
+
+      const saved = await response.json();
+
+      setExportForm({ ...EMPTY_EXPORT });
+      setExportMessage(`Export ${saved.reference} saved successfully.`);
+      await loadExports();
+    } catch (error) {
+      console.error("Export registration failed:", error);
+      setExportError(error.message || "Could not save export.");
+    } finally {
+      setExportSaving(false);
+    }
+  };
+
+  // Update export shipment status.
+  const updateExportStatus = async (record, status) => {
+    if (exportActionId !== null) return;
+
+    setExportActionId(record.id);
+    setExportError("");
+    setExportMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/exports/${record.id}/status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Status update failed (HTTP ${response.status}).`
+        );
+      }
+
+      setExportMessage(`Export ${record.reference} updated to ${status}.`);
+      await loadExports();
+    } catch (error) {
+      console.error("Export status update failed:", error);
+      setExportError(error.message || "Could not update export status.");
+    } finally {
+      setExportActionId(null);
+    }
+  };
+
+  // Delete export.
+  const deleteExport = async (record) => {
+    if (exportActionId !== null) return;
+
+    if (!window.confirm(`Delete export ${record.reference}?`)) return;
+
+    setExportActionId(record.id);
+    setExportError("");
+    setExportMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/exports/${record.id}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Delete failed (HTTP ${response.status}).`
+        );
+      }
+
+      setExportMessage(`Export ${record.reference} deleted successfully.`);
+      await loadExports();
+    } catch (error) {
+      console.error("Export deletion failed:", error);
+      setExportError(error.message || "Could not delete export.");
+    } finally {
+      setExportActionId(null);
+    }
+  };
+
+  // Load user accounts.
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     setUsersError("");
 
     try {
       const response = await fetch(`${API}/api/admin/users`, {
-        method: "GET",
         credentials: "include",
       });
 
-      if (response.status === 401) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
-      if (response.status === 403) {
-        throw new Error("Only administrators can manage users.");
-      }
-
       if (!response.ok) {
-        throw new Error("Unable to load users from the database.");
+        throw new Error(
+          response.status === 401
+            ? "Your session has expired. Log in again."
+            : response.status === 403
+              ? "Only administrators can manage users."
+              : `Could not load users (HTTP ${response.status}).`
+        );
       }
 
-      const data = await response.json();
-      setUsers(data);
+      setUsers(await response.json());
     } catch (error) {
-      console.error("User loading failed:", error);
-      setUsersError(error.message || "Unable to load users.");
+      console.error("Loading users failed:", error);
+      setUsersError(error.message);
     } finally {
       setUsersLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (
-      loggedIn &&
-      userRole === "ADMIN" &&
-      currentPage === "Users"
-    ) {
+    if (loggedIn && userRole === "ADMIN" && currentPage === "Users") {
       loadUsers();
     }
   }, [loggedIn, userRole, currentPage, loadUsers]);
 
-  // Handle product form fields.
+  // Product form input.
   const handleChange = (event) => {
     const { name, value } = event.target;
-
-    setFormData((previous) => ({
-      ...previous,
-      [name]: value,
-    }));
+    setFormData((previous) => ({ ...previous, [name]: value }));
   };
 
   // Register a product.
@@ -165,123 +498,87 @@ function App() {
       const response = await fetch(`${API}/api/products`, {
         method: "POST",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
 
-      if (response.status === 401) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
       if (!response.ok) {
-        throw new Error("Could not register product.");
+        throw new Error(
+          `Product registration failed (HTTP ${response.status}).`
+        );
       }
 
-      setFormData({ ...emptyProductForm });
+      setFormData({
+        productName: "",
+        category: "",
+        manufacturer: "",
+        countryOfOrigin: "",
+        licenseNumber: "",
+        status: "Active",
+      });
+
       setMessage("Product registered successfully!");
       await loadProducts();
     } catch (error) {
       console.error("Product registration failed:", error);
-      setMessage(error.message || "Unable to register product.");
+      setMessage(error.message);
     }
   };
 
-  // Handle user creation form fields.
-  const handleUserFormChange = (event) => {
-    const { name, value } = event.target;
-
-    setUserForm((previous) => ({
-      ...previous,
-      [name]: value,
-    }));
-  };
-
-  // Create a user using the existing POST API.
+  // Create a user account.
   const createUser = async (event) => {
     event.preventDefault();
-    setUserMessage("");
     setUsersError("");
-
-    const username = userForm.username.trim();
-
-    if (!username) {
-      setUserMessage("Please enter a username.");
-      return;
-    }
-
-    if (userForm.password.length < 8) {
-      setUserMessage("Password must contain at least 8 characters.");
-      return;
-    }
-
-    setCreatingUser(true);
+    setUserMessage("");
 
     try {
       const response = await fetch(`${API}/api/admin/users`, {
         method: "POST",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username,
-          password: userForm.password,
-          role: userForm.role,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(userForm),
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (response.status === 401) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
-      if (response.status === 403) {
-        throw new Error("Only administrators can create users.");
-      }
 
       if (!response.ok) {
         throw new Error(
-          data.detail ||
-            data.message ||
-            (response.status === 409
-              ? "Username already exists."
-              : "Unable to create user.")
+          (await response.text()) ||
+            `User creation failed (HTTP ${response.status}).`
         );
       }
 
-      setUserForm({ ...emptyUserForm });
-      setUserMessage(`User "${data.username}" created successfully!`);
-
+      const created = await response.json();
+      setUserMessage(`Account "${created.username}" created successfully.`);
+      setUserForm({ username: "", password: "", role: "OFFICER" });
       await loadUsers();
     } catch (error) {
       console.error("User creation failed:", error);
-      setUserMessage(error.message || "Unable to create user.");
-    } finally {
-      setCreatingUser(false);
+      setUsersError(error.message);
     }
   };
 
-  // Activate or deactivate an account.
+  // Activate or deactivate a user.
   const toggleUserStatus = async (user) => {
+    if (userActionId !== null) return;
+
     if (user.username === currentUsername) {
-      setUserMessage("You cannot change your own account status here.");
+      setUsersError("You cannot change your own account status here.");
       return;
     }
 
-    const nextActiveStatus = !user.active;
+    const newStatus = !user.active;
 
-    const confirmed = window.confirm(
-      `${nextActiveStatus ? "Activate" : "Deactivate"} account "${user.username}"?`
-    );
+    if (
+      user.active &&
+      user.role === "ADMIN" &&
+      users.filter((item) => item.role === "ADMIN" && item.active).length <= 1
+    ) {
+      setUsersError("You cannot deactivate the last active administrator.");
+      return;
+    }
 
-    if (!confirmed) return;
-
-    setUserMessage("");
+    setUserActionId(user.id);
     setUsersError("");
-    setUpdatingUserId(user.id);
+    setUserMessage("");
 
     try {
       const response = await fetch(
@@ -289,47 +586,51 @@ function App() {
         {
           method: "PATCH",
           credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            active: nextActiveStatus,
-          }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: newStatus }),
         }
       );
 
-      const data = await response.json().catch(() => ({}));
-
-      if (response.status === 401) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
-      if (response.status === 403) {
-        throw new Error("Only administrators can update user status.");
-      }
-
       if (!response.ok) {
         throw new Error(
-          data.detail || data.message || "Unable to update account status."
+          (await response.text()) ||
+            `Status update failed (HTTP ${response.status}).`
         );
       }
 
+      const updatedUser = await response.json();
+
+      setUsers((previous) =>
+        previous.map((item) =>
+          item.id === updatedUser.id ? updatedUser : item
+        )
+      );
+
       setUserMessage(
-        `Account "${user.username}" ${
-          nextActiveStatus ? "activated" : "deactivated"
-        } successfully.`
+        `${updatedUser.username} is now ${
+          updatedUser.active ? "Active" : "Inactive"
+        }.`
       );
 
       await loadUsers();
     } catch (error) {
-      console.error("Account status update failed:", error);
-      setUserMessage(error.message || "Unable to update account status.");
+      console.error("User status update failed:", error);
+      setUsersError(error.message || "Could not update user status.");
     } finally {
-      setUpdatingUserId(null);
+      setUserActionId(null);
     }
   };
 
-  // Invalidate the backend session.
+  // Login callback.
+  const handleLogin = (role, username) => {
+    setUserRole(role);
+    setCurrentUsername(username);
+    setCurrentPage("Dashboard");
+    setMessage("");
+    setLoggedIn(true);
+  };
+
+  // Log out.
   const handleLogout = async () => {
     try {
       const response = await fetch(`${API}/api/auth/logout`, {
@@ -337,9 +638,7 @@ function App() {
         credentials: "include",
       });
 
-      if (!response.ok) {
-        throw new Error("Server logout could not be completed.");
-      }
+      if (!response.ok) throw new Error("Server logout failed.");
     } catch (error) {
       console.error("Logout failed:", error);
       setMessage("Logout could not be confirmed. Please try again.");
@@ -352,17 +651,14 @@ function App() {
     setCurrentPage("Dashboard");
     setProducts([]);
     setUsers([]);
-    setMessage("");
-    setUserMessage("");
+    setImports([]);
+    setExports([]);
     setUsersError("");
-  };
-
-  const handleLogin = (role, username) => {
-    setUserRole(role);
-    setCurrentUsername(username);
-    setCurrentPage("Dashboard");
-    setMessage("");
-    setLoggedIn(true);
+    setUserMessage("");
+    setImportError("");
+    setImportMessage("");
+    setExportError("");
+    setExportMessage("");
   };
 
   if (checkingSession) {
@@ -377,9 +673,7 @@ function App() {
     );
   }
 
-  if (!loggedIn) {
-    return <Login onLogin={handleLogin} />;
-  }
+  if (!loggedIn) return <Login onLogin={handleLogin} />;
 
   const activeProducts = products.filter(
     (product) => product.status === "Active"
@@ -387,13 +681,14 @@ function App() {
 
   const inactiveProducts = products.length - activeProducts;
 
-  const activeUsers = users.filter((user) => user.active).length;
-  const inactiveUsers = users.length - activeUsers;
-
   const navItems = [
     { name: "Dashboard", icon: "▦" },
     { name: "Products", icon: "□" },
-    { name: "Reports", icon: "▤" },
+    { name: "Import Management", icon: "⇩" },
+    { name: "Export Management", icon: "⇧" },
+    { name: "Documents", icon: "▤" },
+    { name: "Compliance", icon: "✓" },
+    { name: "Reports", icon: "▧" },
     ...(userRole === "ADMIN"
       ? [
           { name: "Users", icon: "♙" },
@@ -408,22 +703,17 @@ function App() {
         <h3>Total Products</h3>
         <div className="number">{products.length}</div>
       </div>
-
       <div className="card active">
         <h3>Active Products</h3>
         <div className="number">{activeProducts}</div>
       </div>
-
       <div className="card pending">
         <h3>Inactive Products</h3>
         <div className="number">{inactiveProducts}</div>
       </div>
-
       <div className="card">
         <h3>System Status</h3>
-        <div className="number" style={{ color: "#16a34a" }}>
-          Online
-        </div>
+        <div className="number" style={{ color: "#16a34a" }}>Online</div>
       </div>
     </section>
   );
@@ -432,63 +722,25 @@ function App() {
     <>
       <section className="form-section">
         <h2>Register New Product</h2>
-
         <form onSubmit={addProduct}>
           <div className="form-grid">
-            <div className="form-group">
-              <label>Product Name</label>
-              <input
-                name="productName"
-                value={formData.productName}
-                onChange={handleChange}
-                placeholder="Enter product name"
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Category</label>
-              <input
-                name="category"
-                value={formData.category}
-                onChange={handleChange}
-                placeholder="Enter category"
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Manufacturer</label>
-              <input
-                name="manufacturer"
-                value={formData.manufacturer}
-                onChange={handleChange}
-                placeholder="Enter manufacturer"
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Country of Origin</label>
-              <input
-                name="countryOfOrigin"
-                value={formData.countryOfOrigin}
-                onChange={handleChange}
-                placeholder="Enter country"
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>License Number</label>
-              <input
-                name="licenseNumber"
-                value={formData.licenseNumber}
-                onChange={handleChange}
-                placeholder="Enter license number"
-                required
-              />
-            </div>
+            {[
+              ["productName", "Product Name"],
+              ["category", "Category"],
+              ["manufacturer", "Manufacturer"],
+              ["countryOfOrigin", "Country of Origin"],
+              ["licenseNumber", "License Number"],
+            ].map(([name, label]) => (
+              <div className="form-group" key={name}>
+                <label>{label}</label>
+                <input
+                  name={name}
+                  value={formData[name]}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+            ))}
 
             <div className="form-group">
               <label>Status</label>
@@ -497,61 +749,271 @@ function App() {
                 value={formData.status}
                 onChange={handleChange}
               >
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
+                <option>Active</option>
+                <option>Inactive</option>
               </select>
             </div>
           </div>
 
-          <button className="btn" type="submit">
-            + Register Product
-          </button>
+          <button className="btn" type="submit">+ Register Product</button>
         </form>
-
-        {message && (
-          <div className="message" role="status">
-            {message}
-          </div>
-        )}
+        {message && <p role="status">{message}</p>}
       </section>
 
       <section className="table-section">
         <h2>Registered Products</h2>
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Product Name</th><th>Category</th>
+                <th>Manufacturer</th><th>Country</th><th>License</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {products.length === 0 ? (
+                <tr><td colSpan="7">No products registered yet.</td></tr>
+              ) : products.map((product) => (
+                <tr key={product.id}>
+                  <td>{product.id}</td>
+                  <td>{product.productName}</td>
+                  <td>{product.category}</td>
+                  <td>{product.manufacturer}</td>
+                  <td>{product.countryOfOrigin}</td>
+                  <td>{product.licenseNumber}</td>
+                  <td>
+                    <span className={`status ${
+                      product.status === "Active" ? "active" : "inactive"
+                    }`}>{product.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
 
-        {products.length === 0 ? (
-          <p>No products registered yet.</p>
-        ) : (
+  const renderImports = () => (
+    <>
+      <section className="form-section">
+        <h2>Register Import</h2>
+        <p>Enter incoming goods and supplier details.</p>
+
+        <form onSubmit={addImport}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Import Reference</label>
+              <input
+                value={importForm.reference}
+                onChange={(e) => setImportForm((p) => ({ ...p, reference: e.target.value }))}
+                placeholder="IMP-1002"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Supplier</label>
+              <input
+                value={importForm.supplier}
+                onChange={(e) => setImportForm((p) => ({ ...p, supplier: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Country of Origin</label>
+              <input
+                value={importForm.country}
+                onChange={(e) => setImportForm((p) => ({ ...p, country: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Import Status</label>
+              <select
+                value={importForm.status}
+                onChange={(e) => setImportForm((p) => ({ ...p, status: e.target.value }))}
+              >
+                {IMPORT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <button className="btn" type="submit" disabled={importSaving}>
+            {importSaving ? "Saving Import..." : "+ Save Import"}
+          </button>
+        </form>
+
+        {importMessage && <p role="status" style={{ color: "#15803d" }}>{importMessage}</p>}
+        {importError && <p role="alert" style={{ color: "#dc2626" }}>{importError}</p>}
+      </section>
+
+      <section className="table-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div><h2>Import Records</h2><p>Records saved in the database.</p></div>
+          <button className="btn" onClick={loadImports} disabled={importsLoading}>
+            {importsLoading ? "Loading..." : "Refresh Imports"}
+          </button>
+        </div>
+
+        <section className="dashboard">
+          <div className="card total"><h3>Total Imports</h3><div className="number">{imports.length}</div></div>
+          <div className="card pending"><h3>Pending</h3><div className="number">{imports.filter((r) => r.status === "Pending").length}</div></div>
+          <div className="card active"><h3>Completed</h3><div className="number">{imports.filter((r) => r.status === "Completed").length}</div></div>
+        </section>
+
+        {importsLoading && imports.length === 0 ? <p>Loading imports...</p> : (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead><tr><th>ID</th><th>Reference</th><th>Supplier</th><th>Country</th><th>Created</th><th>Status</th><th>Update Status</th><th>Action</th></tr></thead>
+              <tbody>
+                {imports.length === 0 ? <tr><td colSpan="8">No import records yet.</td></tr> : imports.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.id}</td><td>{r.reference}</td><td>{r.supplier}</td><td>{r.country}</td>
+                    <td>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}</td>
+                    <td><span className={`status ${r.status === "Completed" ? "active" : r.status === "Rejected" ? "inactive" : "pending"}`}>{r.status}</span></td>
+                    <td>
+                      <select value={r.status} disabled={importActionId === r.id} onChange={(e) => updateImportStatus(r, e.target.value)}>
+                        {IMPORT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td><button type="button" disabled={importActionId === r.id} onClick={() => deleteImport(r)} style={{ background: "#dc2626", color: "#fff", border: 0, borderRadius: "6px", padding: "8px 12px", cursor: "pointer" }}>{importActionId === r.id ? "Please wait..." : "Delete"}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
+
+  // Export Management UI connected to /api/exports.
+  const renderExports = () => (
+    <>
+      <section className="form-section">
+        <h2>Register Export</h2>
+        <p>Register outgoing goods and track their shipment status.</p>
+
+        <form onSubmit={addExport}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Export Reference</label>
+              <input
+                value={exportForm.reference}
+                onChange={(e) => setExportForm((p) => ({ ...p, reference: e.target.value }))}
+                placeholder="EXP-1001"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Product Name</label>
+              <input
+                value={exportForm.productName}
+                onChange={(e) => setExportForm((p) => ({ ...p, productName: e.target.value }))}
+                placeholder="Enter product name"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Destination Country</label>
+              <input
+                value={exportForm.destinationCountry}
+                onChange={(e) => setExportForm((p) => ({ ...p, destinationCountry: e.target.value }))}
+                placeholder="Enter destination country"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Quantity</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={exportForm.quantity}
+                onChange={(e) => setExportForm((p) => ({ ...p, quantity: e.target.value }))}
+                placeholder="Enter quantity"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Shipment Status</label>
+              <select
+                value={exportForm.status}
+                onChange={(e) => setExportForm((p) => ({ ...p, status: e.target.value }))}
+              >
+                {EXPORT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <button className="btn" type="submit" disabled={exportSaving}>
+            {exportSaving ? "Saving Export..." : "+ Register Export"}
+          </button>
+        </form>
+
+        {exportMessage && <p role="status" style={{ color: "#15803d" }}>{exportMessage}</p>}
+        {exportError && <p role="alert" style={{ color: "#dc2626" }}>{exportError}</p>}
+      </section>
+
+      <section className="table-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div><h2>Export Records</h2><p>Shipment records saved in the Global ARM database.</p></div>
+          <button className="btn" type="button" onClick={loadExports} disabled={exportsLoading}>
+            {exportsLoading ? "Loading..." : "Refresh Exports"}
+          </button>
+        </div>
+
+        <section className="dashboard">
+          <div className="card total"><h3>Total Exports</h3><div className="number">{exports.length}</div></div>
+          <div className="card pending"><h3>Pending</h3><div className="number">{exports.filter((r) => r.status === "Pending").length}</div></div>
+          <div className="card active"><h3>Delivered</h3><div className="number">{exports.filter((r) => r.status === "Delivered").length}</div></div>
+          <div className="card"><h3>Shipped</h3><div className="number">{exports.filter((r) => r.status === "Shipped").length}</div></div>
+        </section>
+
+        {exportsLoading && exports.length === 0 ? <p>Loading export records...</p> : (
           <div style={{ overflowX: "auto" }}>
             <table>
               <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Product Name</th>
-                  <th>Category</th>
-                  <th>Manufacturer</th>
-                  <th>Country</th>
-                  <th>License</th>
-                  <th>Status</th>
-                </tr>
+                <tr><th>ID</th><th>Reference</th><th>Product</th><th>Destination</th><th>Quantity</th><th>Created</th><th>Status</th><th>Update Status</th><th>Action</th></tr>
               </thead>
-
               <tbody>
-                {products.map((product) => (
-                  <tr key={product.id}>
-                    <td>{product.id}</td>
-                    <td>{product.productName}</td>
-                    <td>{product.category}</td>
-                    <td>{product.manufacturer}</td>
-                    <td>{product.countryOfOrigin}</td>
-                    <td>{product.licenseNumber}</td>
+                {exports.length === 0 ? (
+                  <tr><td colSpan="9">No export records yet. Register your first export above.</td></tr>
+                ) : exports.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.id}</td>
+                    <td>{r.reference}</td>
+                    <td>{r.productName}</td>
+                    <td>{r.destinationCountry}</td>
+                    <td>{r.quantity}</td>
+                    <td>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}</td>
                     <td>
-                      <span
-                        className={`status ${
-                          product.status === "Active" ? "active" : "inactive"
-                        }`}
+                      <span className={`status ${r.status === "Delivered" ? "active" : r.status === "Rejected" ? "inactive" : "pending"}`}>{r.status}</span>
+                    </td>
+                    <td>
+                      <select
+                        aria-label={`Status for ${r.reference}`}
+                        value={r.status}
+                        disabled={exportActionId === r.id}
+                        onChange={(e) => updateExportStatus(r, e.target.value)}
                       >
-                        {product.status}
-                      </span>
+                        {EXPORT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        disabled={exportActionId === r.id}
+                        onClick={() => deleteExport(r)}
+                        style={{ background: "#dc2626", color: "#fff", border: 0, borderRadius: "6px", padding: "8px 12px", cursor: "pointer", opacity: exportActionId === r.id ? 0.5 : 1 }}
+                      >
+                        {exportActionId === r.id ? "Please wait..." : "Delete"}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -566,215 +1028,68 @@ function App() {
   const renderUsers = () => (
     <>
       <section className="form-section">
-        <h2>Create New User</h2>
-        <p style={{ color: "#64748b" }}>
-          Add an account to the Global ARM database.
-        </p>
-
+        <h2>Create User Account</h2>
         <form onSubmit={createUser}>
           <div className="form-grid">
             <div className="form-group">
-              <label htmlFor="newUsername">Username</label>
-              <input
-                id="newUsername"
-                name="username"
-                value={userForm.username}
-                onChange={handleUserFormChange}
-                placeholder="Enter username"
-                maxLength={50}
-                autoComplete="off"
-                required
-              />
+              <label>Username</label>
+              <input value={userForm.username} onChange={(e) => setUserForm((p) => ({ ...p, username: e.target.value }))} maxLength={50} required />
             </div>
-
             <div className="form-group">
-              <label htmlFor="newPassword">Password</label>
-              <input
-                id="newPassword"
-                type="password"
-                name="password"
-                value={userForm.password}
-                onChange={handleUserFormChange}
-                placeholder="At least 8 characters"
-                minLength={8}
-                maxLength={72}
-                autoComplete="new-password"
-                required
-              />
+              <label>Password (minimum 8 characters)</label>
+              <input type="password" value={userForm.password} onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))} minLength={8} maxLength={72} required />
             </div>
-
             <div className="form-group">
-              <label htmlFor="newRole">Account Role</label>
-              <select
-                id="newRole"
-                name="role"
-                value={userForm.role}
-                onChange={handleUserFormChange}
-              >
+              <label>Role</label>
+              <select value={userForm.role} onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value }))}>
                 <option value="OFFICER">Officer</option>
                 <option value="ADMIN">Administrator</option>
               </select>
             </div>
           </div>
-
-          <button className="btn" type="submit" disabled={creatingUser}>
-            {creatingUser ? "Creating Account..." : "+ Create User"}
-          </button>
+          <button className="btn" type="submit">+ Create User</button>
         </form>
-
-        {userMessage && (
-          <p
-            role="status"
-            style={{
-              marginTop: "16px",
-              color: /successfully/i.test(userMessage)
-                ? "#15803d"
-                : "#b91c1c",
-            }}
-          >
-            {userMessage}
-          </p>
-        )}
+        {userMessage && <p role="status" style={{ color: "#15803d" }}>{userMessage}</p>}
+        {usersError && <p role="alert" style={{ color: "#dc2626" }}>{usersError}</p>}
       </section>
 
       <section className="table-section">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "12px",
-            marginBottom: "20px",
-          }}
-        >
-          <div>
-            <h2>User Accounts</h2>
-            <p style={{ color: "#64748b" }}>
-              Live records retrieved from MySQL.
-            </p>
-          </div>
-
-          <button
-            className="btn"
-            type="button"
-            onClick={loadUsers}
-            disabled={usersLoading}
-          >
-            {usersLoading ? "Loading..." : "Refresh Users"}
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div><h2>User Management</h2><p>Manage accounts stored in the database.</p></div>
+          <button className="btn" type="button" disabled={usersLoading} onClick={loadUsers}>{usersLoading ? "Loading..." : "Refresh Users"}</button>
         </div>
 
         <section className="dashboard">
-          <div className="card total">
-            <h3>Total Users</h3>
-            <div className="number">{users.length}</div>
-          </div>
-
-          <div className="card active">
-            <h3>Active Users</h3>
-            <div className="number">{activeUsers}</div>
-          </div>
-
-          <div className="card pending">
-            <h3>Inactive Users</h3>
-            <div className="number">{inactiveUsers}</div>
-          </div>
+          <div className="card total"><h3>Total Users</h3><div className="number">{users.length}</div></div>
+          <div className="card active"><h3>Active Users</h3><div className="number">{users.filter((u) => u.active).length}</div></div>
+          <div className="card pending"><h3>Inactive Users</h3><div className="number">{users.filter((u) => !u.active).length}</div></div>
         </section>
 
-        {usersError && (
-          <p role="alert" style={{ color: "#dc2626" }}>
-            {usersError}
-          </p>
-        )}
-
-        {usersLoading ? (
-          <p>Loading users from the database...</p>
-        ) : (
+        {usersLoading ? <p>Loading users...</p> : (
           <div style={{ overflowX: "auto" }}>
             <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Username</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-
+              <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
               <tbody>
-                {users.length === 0 ? (
-                  <tr>
-                    <td colSpan="5">
-                      {usersError
-                        ? "Users could not be loaded."
-                        : "No users found."}
+                {users.length === 0 ? <tr><td colSpan="5">No users found.</td></tr> : users.map((user) => (
+                  <tr key={user.id}>
+                    <td>{user.id}</td><td>{user.username}</td><td>{user.role}</td>
+                    <td><span className={`status ${user.active ? "active" : "inactive"}`}>{user.active ? "Active" : "Inactive"}</span></td>
+                    <td>
+                      <button
+                        type="button"
+                        disabled={userActionId !== null || user.username === currentUsername}
+                        onClick={() => toggleUserStatus(user)}
+                        style={{ padding: "8px 12px", border: "none", borderRadius: "6px", cursor: "pointer", color: "#fff", background: user.active ? "#dc2626" : "#16a34a" }}
+                      >
+                        {userActionId === user.id ? "Updating..." : user.active ? "Deactivate" : "Activate"}
+                      </button>
                     </td>
                   </tr>
-                ) : (
-                  users.map((user) => (
-                    <tr key={user.id}>
-                      <td>{user.id}</td>
-                      <td>{user.username}</td>
-                      <td>
-                        {user.role === "ADMIN"
-                          ? "Administrator"
-                          : "Officer"}
-                      </td>
-                      <td>
-                        <span
-                          className={`status ${
-                            user.active ? "active" : "inactive"
-                          }`}
-                        >
-                          {user.active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          disabled={
-                            updatingUserId === user.id ||
-                            user.username === currentUsername
-                          }
-                          onClick={() => toggleUserStatus(user)}
-                          style={{
-                            padding: "8px 12px",
-                            border: "none",
-                            borderRadius: "6px",
-                            cursor:
-                              updatingUserId === user.id ||
-                              user.username === currentUsername
-                                ? "not-allowed"
-                                : "pointer",
-                            color: "white",
-                            background: user.active ? "#dc2626" : "#16a34a",
-                            opacity:
-                              updatingUserId === user.id ||
-                              user.username === currentUsername
-                                ? 0.55
-                                : 1,
-                          }}
-                        >
-                          {updatingUserId === user.id
-                            ? "Updating..."
-                            : user.active
-                              ? "Deactivate"
-                              : "Activate"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
+                ))}
               </tbody>
             </table>
           </div>
         )}
-
-        <p style={{ color: "#64748b", marginTop: "16px" }}>
-          You cannot change your own account status from this page.
-        </p>
       </section>
     </>
   );
@@ -784,25 +1099,11 @@ function App() {
       case "Dashboard":
         return (
           <>
-            <h2>
-              {userRole === "ADMIN"
-                ? "Administrator Dashboard"
-                : "Officer Dashboard"}
-            </h2>
-
-            <p style={{ color: "#64748b" }}>
-              Welcome to Global ARM Management System.
-            </p>
-
+            <h2>{userRole === "ADMIN" ? "Administrator Dashboard" : "Officer Dashboard"}</h2>
+            <p>Welcome to Global ARM Management System.</p>
             {renderStats()}
-
             <section className="table-section">
-              <h3>
-                {userRole === "ADMIN"
-                  ? "Administrator Responsibilities"
-                  : "Officer Workspace"}
-              </h3>
-
+              <h3>{userRole === "ADMIN" ? "Administrator Responsibilities" : "Officer Workspace"}</h3>
               <ul>
                 {userRole === "ADMIN" ? (
                   <>
@@ -816,6 +1117,7 @@ function App() {
                     <li>View registered products</li>
                     <li>Register product records</li>
                     <li>Review product reports</li>
+                    <li>Manage assigned import/export work</li>
                   </>
                 )}
               </ul>
@@ -826,37 +1128,64 @@ function App() {
       case "Products":
         return renderProducts();
 
-      case "Reports":
+      case "Import Management":
+        return renderImports();
+
+      case "Export Management":
+        return renderExports();
+
+      case "Documents":
         return (
-          <>
-            <h2>Product Reports</h2>
-            <p style={{ color: "#64748b" }}>
-              Summary of registered product records.
-            </p>
-            {renderStats()}
-          </>
+          <section className="form-section">
+            <h2>Documents</h2>
+            <p>Track licenses, permits, and shipment documents.</p>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              setMessage("Document reference entered. Upload and database storage are not connected yet.");
+            }}>
+              <div className="form-group">
+                <label>Document Reference</label>
+                <input value={documentReference} onChange={(e) => setDocumentReference(e.target.value)} required />
+              </div>
+              <button className="btn" type="submit">Submit Document Preview</button>
+            </form>
+            {message && <p role="status">{message}</p>}
+            <p>File upload and secure document storage will be added later.</p>
+          </section>
         );
 
-      case "Users":
-        return userRole === "ADMIN" ? (
-          renderUsers()
-        ) : (
-          <p>You do not have permission to access this page.</p>
+      case "Compliance":
+        return (
+          <section className="form-section">
+            <h2>Compliance</h2>
+            <p>Review compliance requirements and status.</p>
+            <div className="form-group">
+              <label>Compliance Status</label>
+              <select value={complianceStatus} onChange={(e) => setComplianceStatus(e.target.value)}>
+                <option>Pending Review</option>
+                <option>Compliant</option>
+                <option>Requires Attention</option>
+              </select>
+            </div>
+            <p>Selected status: <strong>{complianceStatus}</strong></p>
+            <p>Compliance records are not saved to the database yet.</p>
+          </section>
         );
+
+      case "Reports":
+        return <><h2>Product Reports</h2><p>Summary of registered product records.</p>{renderStats()}</>;
+
+      case "Users":
+        return userRole === "ADMIN" ? renderUsers() : <p>You do not have permission to access this page.</p>;
 
       case "Settings":
         return userRole === "ADMIN" ? (
           <section className="table-section">
             <h2>System Settings</h2>
             <p>Global ARM application configuration.</p>
-            <p>
-              Advanced settings will be implemented in a later development
-              phase.
-            </p>
+            <p>Advanced settings can be added later.</p>
           </section>
-        ) : (
-          <p>You do not have permission to access this page.</p>
-        );
+        ) : <p>You do not have permission to access this page.</p>;
 
       default:
         return <p>Select a page from the sidebar.</p>;
@@ -870,51 +1199,29 @@ function App() {
           <h1>Global ARM Management System</h1>
           <p>Global Arms Registration &amp; Management Platform</p>
         </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            flexWrap: "wrap",
-          }}
-        >
-          <span className="header-badge">
-            {currentUsername} ·{" "}
-            {userRole === "ADMIN" ? "Administrator" : "Officer"}
-          </span>
-
-          <button
-            onClick={handleLogout}
-            style={{
-              padding: "10px 16px",
-              border: "none",
-              borderRadius: "8px",
-              background: "#dc2626",
-              color: "white",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
-          >
-            Logout
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <span className="header-badge">{currentUsername} · {userRole === "ADMIN" ? "Administrator" : "Officer"}</span>
+          <button type="button" onClick={handleLogout} style={{ padding: "10px 16px", border: "none", borderRadius: "8px", background: "#dc2626", color: "#fff", cursor: "pointer", fontWeight: "bold" }}>Logout</button>
         </div>
       </header>
 
       <div className="dashboard-layout">
         <aside className="sidebar">
           <div className="sidebar-title">GLOBAL ARM</div>
-
           {navItems.map((item) => (
             <button
               key={item.name}
-              className={`sidebar-item ${
-                currentPage === item.name ? "active" : ""
-              }`}
+              type="button"
+              className={`sidebar-item ${currentPage === item.name ? "active" : ""}`}
               onClick={() => {
                 setCurrentPage(item.name);
                 setMessage("");
+                setUsersError("");
                 setUserMessage("");
+                setImportError("");
+                setImportMessage("");
+                setExportError("");
+                setExportMessage("");
               }}
             >
               <span style={{ marginRight: "10px" }}>{item.icon}</span>
@@ -925,15 +1232,9 @@ function App() {
 
         <main className="dashboard-content">
           <div style={{ marginBottom: "25px" }}>
-            <h2>
-              Welcome,{" "}
-              {userRole === "ADMIN" ? "Administrator" : "Officer"}
-            </h2>
-            <p style={{ color: "#64748b" }}>
-              Manage and monitor your workspace.
-            </p>
+            <h2>Welcome, {userRole === "ADMIN" ? "Administrator" : "Officer"}</h2>
+            <p>Manage and monitor your workspace.</p>
           </div>
-
           {renderPage()}
         </main>
       </div>

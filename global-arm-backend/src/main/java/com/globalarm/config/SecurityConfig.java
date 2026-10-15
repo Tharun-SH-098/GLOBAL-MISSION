@@ -3,6 +3,7 @@ package com.globalarm.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -45,22 +46,27 @@ public class SecurityConfig {
         http
             .cors(Customizer.withDefaults())
 
-            // CSRF is disabled for local development only.
-            // Enable CSRF protection before production deployment.
+            // Local development only. Review CSRF protection
+            // before deploying the application.
             .csrf(csrf -> csrf.disable())
 
             .authorizeHttpRequests(auth -> auth
-                // Login and logout endpoints
+                // Allow browser CORS preflight requests.
+                .requestMatchers(HttpMethod.OPTIONS, "/**")
+                .permitAll()
+
+                // Login, logout and session-check endpoints.
                 .requestMatchers(
                     "/api/auth/login",
-                    "/api/auth/logout"
+                    "/api/auth/logout",
+                    "/api/auth/me"
                 ).permitAll()
 
-                // Only administrators can manage users
+                // User administration remains ADMIN-only.
                 .requestMatchers("/api/admin/users/**")
                 .hasRole("ADMIN")
 
-                // All remaining endpoints require authentication
+                // All other endpoints require authentication.
                 .anyRequest().authenticated()
             )
 
@@ -93,15 +99,13 @@ public class SecurityConfig {
                 "GET",
                 "POST",
                 "PUT",
+                "PATCH",
                 "DELETE",
                 "OPTIONS"
             )
         );
 
-        configuration.setAllowedHeaders(
-            List.of("*")
-        );
-
+        configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source =
@@ -115,3 +119,4 @@ public class SecurityConfig {
         return source;
     }
 }
+

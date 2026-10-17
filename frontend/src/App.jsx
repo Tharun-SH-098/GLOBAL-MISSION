@@ -35,6 +35,39 @@ const EXPORT_STATUSES = [
   "Rejected",
 ];
 
+const EMPTY_DOCUMENT = {
+  reference: "",
+  documentName: "",
+  documentType: "License",
+  relatedReference: "",
+  status: "Pending",
+};
+
+const DOCUMENT_STATUSES = [
+  "Pending",
+  "Submitted",
+  "Approved",
+  "Rejected",
+  "Expired",
+];
+
+const EMPTY_COMPLIANCE = {
+  reference: "",
+  requirementName: "",
+  category: "Import/Export",
+  description: "",
+  dueDate: "",
+  status: "Pending",
+};
+
+const COMPLIANCE_STATUSES = [
+  "Pending",
+  "Under Review",
+  "Compliant",
+  "Non-Compliant",
+  "Expired",
+];
+
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [userRole, setUserRole] = useState("");
@@ -84,9 +117,23 @@ function App() {
   const [exportMessage, setExportMessage] = useState("");
   const [exportForm, setExportForm] = useState({ ...EMPTY_EXPORT });
 
-  const [documentReference, setDocumentReference] = useState("");
-  const [complianceStatus, setComplianceStatus] =
-    useState("Pending Review");
+  // Documents Management state
+  const [documents, setDocuments] = useState([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [documentSaving, setDocumentSaving] = useState(false);
+  const [documentActionId, setDocumentActionId] = useState(null);
+  const [documentError, setDocumentError] = useState("");
+  const [documentMessage, setDocumentMessage] = useState("");
+  const [documentForm, setDocumentForm] = useState({ ...EMPTY_DOCUMENT });
+
+  // Compliance Management state
+  const [complianceRecords, setComplianceRecords] = useState([]);
+  const [complianceLoading, setComplianceLoading] = useState(false);
+  const [complianceSaving, setComplianceSaving] = useState(false);
+  const [complianceActionId, setComplianceActionId] = useState(null);
+  const [complianceError, setComplianceError] = useState("");
+  const [complianceMessage, setComplianceMessage] = useState("");
+  const [complianceForm, setComplianceForm] = useState({ ...EMPTY_COMPLIANCE });
 
   // Check login session.
   useEffect(() => {
@@ -448,6 +495,308 @@ function App() {
     }
   };
 
+  // Load documents from MySQL.
+  const loadDocuments = useCallback(async () => {
+    setDocumentsLoading(true);
+    setDocumentError("");
+
+    try {
+      const response = await fetch(`${API}/api/documents`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Session expired. Please log in again."
+            : response.status === 403
+              ? "Access denied. Check your account permissions."
+              : `Could not load documents (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setDocuments(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Document loading failed:", error);
+      setDocumentError(error.message || "Could not load documents.");
+    } finally {
+      setDocumentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn && currentPage === "Documents") {
+      loadDocuments();
+    }
+  }, [loggedIn, currentPage, loadDocuments]);
+
+  // Register a document.
+  const addDocument = async (event) => {
+    event.preventDefault();
+    setDocumentError("");
+    setDocumentMessage("");
+    setDocumentSaving(true);
+
+    const payload = {
+      ...documentForm,
+      reference: documentForm.reference.trim(),
+      documentName: documentForm.documentName.trim(),
+      documentType: documentForm.documentType.trim(),
+      relatedReference: documentForm.relatedReference.trim(),
+    };
+
+    try {
+      const response = await fetch(`${API}/api/documents`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let details = "";
+        try {
+          const body = await response.json();
+          details = body.message || JSON.stringify(body);
+        } catch {
+          details = await response.text();
+        }
+        throw new Error(
+          details || `Document registration failed (HTTP ${response.status}).`
+        );
+      }
+
+      const saved = await response.json();
+      setDocumentForm({ ...EMPTY_DOCUMENT });
+      setDocumentMessage(`Document ${saved.reference} saved successfully.`);
+      await loadDocuments();
+    } catch (error) {
+      console.error("Document registration failed:", error);
+      setDocumentError(error.message || "Could not save document.");
+    } finally {
+      setDocumentSaving(false);
+    }
+  };
+
+  // Update document status.
+  const updateDocumentStatus = async (record, status) => {
+    if (documentActionId !== null) return;
+
+    setDocumentActionId(record.id);
+    setDocumentError("");
+    setDocumentMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/documents/${record.id}/status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Status update failed (HTTP ${response.status}).`
+        );
+      }
+
+      setDocumentMessage(`Document ${record.reference} updated to ${status}.`);
+      await loadDocuments();
+    } catch (error) {
+      console.error("Document status update failed:", error);
+      setDocumentError(error.message || "Could not update document status.");
+    } finally {
+      setDocumentActionId(null);
+    }
+  };
+
+  // Delete a document.
+  const deleteDocument = async (record) => {
+    if (documentActionId !== null) return;
+    if (!window.confirm(`Delete document ${record.reference}?`)) return;
+
+    setDocumentActionId(record.id);
+    setDocumentError("");
+    setDocumentMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/documents/${record.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) ||
+            `Delete failed (HTTP ${response.status}).`
+        );
+      }
+
+      setDocumentMessage(`Document ${record.reference} deleted successfully.`);
+      await loadDocuments();
+    } catch (error) {
+      console.error("Document deletion failed:", error);
+      setDocumentError(error.message || "Could not delete document.");
+    } finally {
+      setDocumentActionId(null);
+    }
+  };
+
+  // Load compliance records from MySQL.
+  const loadCompliance = useCallback(async () => {
+    setComplianceLoading(true);
+    setComplianceError("");
+
+    try {
+      const response = await fetch(`${API}/api/compliance`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Session expired. Please log in again."
+            : response.status === 403
+              ? "Access denied. Check your account permissions."
+              : `Could not load compliance records (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setComplianceRecords(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Compliance loading failed:", error);
+      setComplianceError(error.message || "Could not load compliance records.");
+    } finally {
+      setComplianceLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn && currentPage === "Compliance") {
+      loadCompliance();
+    }
+  }, [loggedIn, currentPage, loadCompliance]);
+
+  // Register a compliance record.
+  const addCompliance = async (event) => {
+    event.preventDefault();
+    setComplianceError("");
+    setComplianceMessage("");
+    setComplianceSaving(true);
+
+    const payload = {
+      ...complianceForm,
+      reference: complianceForm.reference.trim(),
+      requirementName: complianceForm.requirementName.trim(),
+      category: complianceForm.category.trim(),
+      description: complianceForm.description.trim(),
+      dueDate: complianceForm.dueDate
+        ? `${complianceForm.dueDate}T00:00:00`
+        : null,
+    };
+
+    try {
+      const response = await fetch(`${API}/api/compliance`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let details = "";
+        try {
+          const body = await response.json();
+          details = body.message || JSON.stringify(body);
+        } catch {
+          details = await response.text();
+        }
+        throw new Error(
+          details || `Compliance registration failed (HTTP ${response.status}).`
+        );
+      }
+
+      const saved = await response.json();
+      setComplianceForm({ ...EMPTY_COMPLIANCE });
+      setComplianceMessage(`Compliance record ${saved.reference} saved successfully.`);
+      await loadCompliance();
+    } catch (error) {
+      console.error("Compliance registration failed:", error);
+      setComplianceError(error.message || "Could not save compliance record.");
+    } finally {
+      setComplianceSaving(false);
+    }
+  };
+
+  // Update compliance status.
+  const updateComplianceStatus = async (record, status) => {
+    if (complianceActionId !== null) return;
+
+    setComplianceActionId(record.id);
+    setComplianceError("");
+    setComplianceMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/compliance/${record.id}/status`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) || `Status update failed (HTTP ${response.status}).`
+        );
+      }
+
+      setComplianceMessage(`Compliance record ${record.reference} updated to ${status}.`);
+      await loadCompliance();
+    } catch (error) {
+      console.error("Compliance status update failed:", error);
+      setComplianceError(error.message || "Could not update compliance status.");
+    } finally {
+      setComplianceActionId(null);
+    }
+  };
+
+  // Delete a compliance record.
+  const deleteCompliance = async (record) => {
+    if (complianceActionId !== null) return;
+    if (!window.confirm(`Delete compliance record ${record.reference}?`)) return;
+
+    setComplianceActionId(record.id);
+    setComplianceError("");
+    setComplianceMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/compliance/${record.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) || `Delete failed (HTTP ${response.status}).`
+        );
+      }
+
+      setComplianceMessage(`Compliance record ${record.reference} deleted successfully.`);
+      await loadCompliance();
+    } catch (error) {
+      console.error("Compliance deletion failed:", error);
+      setComplianceError(error.message || "Could not delete compliance record.");
+    } finally {
+      setComplianceActionId(null);
+    }
+  };
+
   // Load user accounts.
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -653,12 +1002,16 @@ function App() {
     setUsers([]);
     setImports([]);
     setExports([]);
+    setDocuments([]);
+    setComplianceRecords([]);
     setUsersError("");
     setUserMessage("");
     setImportError("");
     setImportMessage("");
     setExportError("");
     setExportMessage("");
+    setDocumentError("");
+    setDocumentMessage("");
   };
 
   if (checkingSession) {
@@ -690,11 +1043,8 @@ function App() {
     { name: "Compliance", icon: "✓" },
     { name: "Reports", icon: "▧" },
     ...(userRole === "ADMIN"
-      ? [
-          { name: "Users", icon: "♙" },
-          { name: "Settings", icon: "⚙" },
-        ]
-      : []),
+  ? [{ name: "Reports", icon: "▧" }]
+  : []),,
   ];
 
   const renderStats = () => (
@@ -1025,6 +1375,239 @@ function App() {
     </>
   );
 
+  const renderDocuments = () => (
+    <>
+      <section className="form-section">
+        <h2>Register Document</h2>
+        <p>Record licenses, permits, and shipment documents in the database.</p>
+
+        <form onSubmit={addDocument}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Document Reference</label>
+              <input
+                value={documentForm.reference}
+                onChange={(e) => setDocumentForm((p) => ({ ...p, reference: e.target.value }))}
+                placeholder="DOC-1001"
+                maxLength={100}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Document Name</label>
+              <input
+                value={documentForm.documentName}
+                onChange={(e) => setDocumentForm((p) => ({ ...p, documentName: e.target.value }))}
+                placeholder="Import License"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Document Type</label>
+              <select
+                value={documentForm.documentType}
+                onChange={(e) => setDocumentForm((p) => ({ ...p, documentType: e.target.value }))}
+                required
+              >
+                <option>License</option>
+                <option>Permit</option>
+                <option>Invoice</option>
+                <option>Customs Declaration</option>
+                <option>Shipping Document</option>
+                <option>Certificate</option>
+                <option>Other</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Related Import/Export Reference (optional)</label>
+              <input
+                value={documentForm.relatedReference}
+                onChange={(e) => setDocumentForm((p) => ({ ...p, relatedReference: e.target.value }))}
+                placeholder="IMP-1001 or EXP-1001"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Document Status</label>
+              <select
+                value={documentForm.status}
+                onChange={(e) => setDocumentForm((p) => ({ ...p, status: e.target.value }))}
+              >
+                {DOCUMENT_STATUSES.map((status) => (
+                  <option key={status}>{status}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <button className="btn" type="submit" disabled={documentSaving}>
+            {documentSaving ? "Saving Document..." : "+ Register Document"}
+          </button>
+        </form>
+
+        {documentMessage && <p role="status" style={{ color: "#15803d" }}>{documentMessage}</p>}
+        {documentError && <p role="alert" style={{ color: "#dc2626" }}>{documentError}</p>}
+      </section>
+
+      <section className="table-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div>
+            <h2>Document Records</h2>
+            <p>Documents registered in the Global ARM database.</p>
+          </div>
+          <button className="btn" type="button" onClick={loadDocuments} disabled={documentsLoading}>
+            {documentsLoading ? "Loading..." : "Refresh Documents"}
+          </button>
+        </div>
+
+        <section className="dashboard">
+          <div className="card total"><h3>Total Documents</h3><div className="number">{documents.length}</div></div>
+          <div className="card pending"><h3>Pending</h3><div className="number">{documents.filter((d) => d.status === "Pending").length}</div></div>
+          <div className="card active"><h3>Approved</h3><div className="number">{documents.filter((d) => d.status === "Approved").length}</div></div>
+          <div className="card"><h3>Expired</h3><div className="number">{documents.filter((d) => d.status === "Expired").length}</div></div>
+        </section>
+
+        {documentsLoading && documents.length === 0 ? <p>Loading documents...</p> : (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Reference</th><th>Document Name</th><th>Type</th><th>Related Reference</th><th>Created</th><th>Status</th><th>Update Status</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                {documents.length === 0 ? (
+                  <tr><td colSpan="9">No document records yet. Register your first document above.</td></tr>
+                ) : documents.map((record) => (
+                  <tr key={record.id}>
+                    <td>{record.id}</td>
+                    <td>{record.reference}</td>
+                    <td>{record.documentName}</td>
+                    <td>{record.documentType}</td>
+                    <td>{record.relatedReference || "—"}</td>
+                    <td>{record.createdAt ? new Date(record.createdAt).toLocaleString() : "—"}</td>
+                    <td>
+                      <span className={`status ${record.status === "Approved" ? "active" : record.status === "Rejected" || record.status === "Expired" ? "inactive" : "pending"}`}>
+                        {record.status}
+                      </span>
+                    </td>
+                    <td>
+                      <select
+                        aria-label={`Status for ${record.reference}`}
+                        value={record.status}
+                        disabled={documentActionId === record.id}
+                        onChange={(e) => updateDocumentStatus(record, e.target.value)}
+                      >
+                        {DOCUMENT_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        disabled={documentActionId === record.id}
+                        onClick={() => deleteDocument(record)}
+                        style={{ background: "#dc2626", color: "#fff", border: 0, borderRadius: "6px", padding: "8px 12px", cursor: "pointer", opacity: documentActionId === record.id ? 0.5 : 1 }}
+                      >
+                        {documentActionId === record.id ? "Please wait..." : "Delete"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
+
+  const renderCompliance = () => (
+    <>
+      <section className="form-section">
+        <h2>Register Compliance Requirement</h2>
+        <p>Record regulatory requirements and track their compliance status.</p>
+        <form onSubmit={addCompliance}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Compliance Reference</label>
+              <input value={complianceForm.reference} onChange={(e) => setComplianceForm((p) => ({ ...p, reference: e.target.value }))} placeholder="CMP-1001" maxLength={100} required />
+            </div>
+            <div className="form-group">
+              <label>Requirement Name</label>
+              <input value={complianceForm.requirementName} onChange={(e) => setComplianceForm((p) => ({ ...p, requirementName: e.target.value }))} placeholder="Import License Compliance" required />
+            </div>
+            <div className="form-group">
+              <label>Category</label>
+              <select value={complianceForm.category} onChange={(e) => setComplianceForm((p) => ({ ...p, category: e.target.value }))} required>
+                <option>Import/Export</option>
+                <option>Licensing</option>
+                <option>Customs</option>
+                <option>Safety</option>
+                <option>Documentation</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Due Date (optional)</label>
+              <input type="date" value={complianceForm.dueDate} onChange={(e) => setComplianceForm((p) => ({ ...p, dueDate: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Status</label>
+              <select value={complianceForm.status} onChange={(e) => setComplianceForm((p) => ({ ...p, status: e.target.value }))}>
+                {COMPLIANCE_STATUSES.map((status) => <option key={status}>{status}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Description (optional)</label>
+              <input value={complianceForm.description} onChange={(e) => setComplianceForm((p) => ({ ...p, description: e.target.value }))} placeholder="Additional details" />
+            </div>
+          </div>
+          <button className="btn" type="submit" disabled={complianceSaving}>
+            {complianceSaving ? "Saving Compliance..." : "+ Register Requirement"}
+          </button>
+        </form>
+        {complianceMessage && <p role="status" style={{ color: "#15803d" }}>{complianceMessage}</p>}
+        {complianceError && <p role="alert" style={{ color: "#dc2626" }}>{complianceError}</p>}
+      </section>
+
+      <section className="table-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div><h2>Compliance Records</h2><p>Compliance requirements stored in the database.</p></div>
+          <button className="btn" type="button" onClick={loadCompliance} disabled={complianceLoading}>{complianceLoading ? "Loading..." : "Refresh Compliance"}</button>
+        </div>
+        <section className="dashboard">
+          <div className="card total"><h3>Total Records</h3><div className="number">{complianceRecords.length}</div></div>
+          <div className="card pending"><h3>Pending</h3><div className="number">{complianceRecords.filter((r) => r.status === "Pending").length}</div></div>
+          <div className="card active"><h3>Compliant</h3><div className="number">{complianceRecords.filter((r) => r.status === "Compliant").length}</div></div>
+          <div className="card"><h3>Requires Attention</h3><div className="number">{complianceRecords.filter((r) => r.status === "Non-Compliant" || r.status === "Expired").length}</div></div>
+        </section>
+        {complianceLoading && complianceRecords.length === 0 ? <p>Loading compliance records...</p> : (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead><tr><th>ID</th><th>Reference</th><th>Requirement</th><th>Category</th><th>Due Date</th><th>Created</th><th>Status</th><th>Update Status</th><th>Action</th></tr></thead>
+              <tbody>
+                {complianceRecords.length === 0 ? <tr><td colSpan="9">No compliance records yet. Register your first requirement above.</td></tr> : complianceRecords.map((record) => (
+                  <tr key={record.id}>
+                    <td>{record.id}</td>
+                    <td>{record.reference}</td>
+                    <td>{record.requirementName}{record.description ? <div style={{ fontSize: "12px", opacity: 0.75 }}>{record.description}</div> : null}</td>
+                    <td>{record.category}</td>
+                    <td>{record.dueDate ? new Date(record.dueDate).toLocaleDateString() : "—"}</td>
+                    <td>{record.createdAt ? new Date(record.createdAt).toLocaleString() : "—"}</td>
+                    <td><span className={`status ${record.status === "Compliant" ? "active" : record.status === "Non-Compliant" || record.status === "Expired" ? "inactive" : "pending"}`}>{record.status}</span></td>
+                    <td><select aria-label={`Status for ${record.reference}`} value={record.status} disabled={complianceActionId === record.id} onChange={(e) => updateComplianceStatus(record, e.target.value)}>{COMPLIANCE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></td>
+                    <td><button type="button" disabled={complianceActionId === record.id} onClick={() => deleteCompliance(record)} style={{ background: "#dc2626", color: "#fff", border: 0, borderRadius: "6px", padding: "8px 12px", cursor: "pointer", opacity: complianceActionId === record.id ? 0.5 : 1 }}>{complianceActionId === record.id ? "Please wait..." : "Delete"}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
+
   const renderUsers = () => (
     <>
       <section className="form-section">
@@ -1108,7 +1691,7 @@ function App() {
                 {userRole === "ADMIN" ? (
                   <>
                     <li>Monitor registered products</li>
-                    <li>Review product reports</li>
+                    
                     <li>Manage user accounts</li>
                     <li>Configure system settings</li>
                   </>
@@ -1135,57 +1718,22 @@ function App() {
         return renderExports();
 
       case "Documents":
-        return (
-          <section className="form-section">
-            <h2>Documents</h2>
-            <p>Track licenses, permits, and shipment documents.</p>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              setMessage("Document reference entered. Upload and database storage are not connected yet.");
-            }}>
-              <div className="form-group">
-                <label>Document Reference</label>
-                <input value={documentReference} onChange={(e) => setDocumentReference(e.target.value)} required />
-              </div>
-              <button className="btn" type="submit">Submit Document Preview</button>
-            </form>
-            {message && <p role="status">{message}</p>}
-            <p>File upload and secure document storage will be added later.</p>
-          </section>
-        );
+        return renderDocuments();
 
       case "Compliance":
-        return (
-          <section className="form-section">
-            <h2>Compliance</h2>
-            <p>Review compliance requirements and status.</p>
-            <div className="form-group">
-              <label>Compliance Status</label>
-              <select value={complianceStatus} onChange={(e) => setComplianceStatus(e.target.value)}>
-                <option>Pending Review</option>
-                <option>Compliant</option>
-                <option>Requires Attention</option>
-              </select>
-            </div>
-            <p>Selected status: <strong>{complianceStatus}</strong></p>
-            <p>Compliance records are not saved to the database yet.</p>
-          </section>
-        );
+        return renderCompliance();
 
       case "Reports":
-        return <><h2>Product Reports</h2><p>Summary of registered product records.</p>{renderStats()}</>;
-
-      case "Users":
-        return userRole === "ADMIN" ? renderUsers() : <p>You do not have permission to access this page.</p>;
-
-      case "Settings":
-        return userRole === "ADMIN" ? (
-          <section className="table-section">
-            <h2>System Settings</h2>
-            <p>Global ARM application configuration.</p>
-            <p>Advanced settings can be added later.</p>
-          </section>
-        ) : <p>You do not have permission to access this page.</p>;
+       case "Reports":
+  return userRole === "ADMIN" ? (
+    <>
+      <h2>Product Reports</h2>
+      <p>Summary of registered product records.</p>
+      {renderStats()}
+    </>
+  ) : (
+    <p>You do not have permission to access this page.</p>
+  );
 
       default:
         return <p>Select a page from the sidebar.</p>;
@@ -1222,6 +1770,10 @@ function App() {
                 setImportMessage("");
                 setExportError("");
                 setExportMessage("");
+                setDocumentError("");
+                setDocumentMessage("");
+                setComplianceError("");
+                setComplianceMessage("");
               }}
             >
               <span style={{ marginRight: "10px" }}>{item.icon}</span>

@@ -52,19 +52,19 @@ public class SecurityConfig {
 
             .authorizeHttpRequests(auth -> auth
                 // Allow browser CORS preflight requests.
-                .requestMatchers(HttpMethod.OPTIONS, "/**")
-                .permitAll()
+                
+                // Both ADMIN and OFFICER can submit reports.
+                .requestMatchers(HttpMethod.POST, "/api/reports")
+                .hasAnyRole("ADMIN", "OFFICER")
 
-                // Login, logout and session-check endpoints.
-                .requestMatchers(
-                    "/api/auth/login",
-                    "/api/auth/logout",
-                    "/api/auth/me"
-                ).permitAll()
-
-                // User administration remains ADMIN-only.
-                .requestMatchers("/api/admin/users/**")
+                // Only ADMIN can view the reports table.
+                .requestMatchers(HttpMethod.GET, "/api/reports")
                 .hasRole("ADMIN")
+
+                // Only ADMIN can update report status.
+                .requestMatchers(HttpMethod.PATCH, "/api/reports/**")
+                .hasRole("ADMIN")
+
 
                 // All other endpoints require authentication.
                 .anyRequest().authenticated()

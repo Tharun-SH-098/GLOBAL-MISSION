@@ -75,6 +75,14 @@ function App() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [currentPage, setCurrentPage] = useState("Dashboard");
 
+
+  const [riskFindings, setRiskFindings] = useState([]);
+  const [riskLoading, setRiskLoading] = useState(false);
+  const [riskError, setRiskError] = useState("");
+  const [riskMessage, setRiskMessage] = useState("");
+  const [riskAnalyzing, setRiskAnalyzing] = useState(false);
+  const [riskActionId, setRiskActionId] = useState(null);
+
   const [products, setProducts] = useState([]);
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -82,6 +90,7 @@ function App() {
   const [userMessage, setUserMessage] = useState("");
   const [userActionId, setUserActionId] = useState(null);
 
+  
   const [userForm, setUserForm] = useState({
     username: "",
     password: "",
@@ -89,6 +98,18 @@ function App() {
   });
 
   const [message, setMessage] = useState("");
+
+  // Reports Management state.
+  const [reports, setReports] = useState([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportActionId, setReportActionId] = useState(null);
+  const [reportError, setReportError] = useState("");
+  const [reportMessage, setReportMessage] = useState("");
+  const [reportForm, setReportForm] = useState({
+    reportName: "",
+    description: "",
+  });
 
   const [formData, setFormData] = useState({
     productName: "",
@@ -832,6 +853,124 @@ function App() {
     }
   }, [loggedIn, userRole, currentPage, loadUsers]);
 
+  // Load submitted reports. The backend also restricts this endpoint to ADMIN.
+  const loadReports = useCallback(async () => {
+    if (userRole !== "ADMIN") return;
+
+    setReportsLoading(true);
+    setReportError("");
+
+    try {
+      const response = await fetch(`${API}/api/reports`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Your session has expired. Please log in again."
+            : response.status === 403
+              ? "Only administrators can view submitted reports."
+              : `Could not load reports (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setReports(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Loading reports failed:", error);
+      setReportError(error.message || "Could not load reports.");
+    } finally {
+      setReportsLoading(false);
+    }
+  }, [userRole]);
+
+  useEffect(() => {
+    if (loggedIn && userRole === "ADMIN" && currentPage === "Reports") {
+      loadReports();
+    }
+  }, [loggedIn, userRole, currentPage, loadReports]);
+
+  // Submit report details. The actual file is not stored in MySQL.
+  const submitReport = async (event) => {
+    event.preventDefault();
+    setReportError("");
+    setReportMessage("");
+    setReportSaving(true);
+
+    try {
+      const response = await fetch(`${API}/api/reports`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reportName: reportForm.reportName.trim(),
+          description: reportForm.description.trim(),
+        }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        // The API may return an empty response body.
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || `Report submission failed (HTTP ${response.status}).`
+        );
+      }
+
+      setReportForm({ reportName: "", description: "" });
+      setReportMessage("Report submitted successfully.");
+
+      if (userRole === "ADMIN") await loadReports();
+    } catch (error) {
+      console.error("Report submission failed:", error);
+      setReportError(error.message || "Report submission failed.");
+    } finally {
+      setReportSaving(false);
+    }
+  };
+
+  // Only ADMIN can update report status; the backend enforces this too.
+  const updateReportStatus = async (report, status) => {
+    if (userRole !== "ADMIN" || reportActionId !== null) return;
+
+    setReportActionId(report.id);
+    setReportError("");
+    setReportMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/reports/${report.id}/status`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+
+      if (!response.ok) {
+        let details = "";
+        try {
+          const body = await response.json();
+          details = body.message || JSON.stringify(body);
+        } catch {
+          details = await response.text();
+        }
+        throw new Error(details || `Status update failed (HTTP ${response.status}).`);
+      }
+
+      setReportMessage(`Report status updated to ${status}.`);
+      await loadReports();
+    } catch (error) {
+      console.error("Report status update failed:", error);
+      setReportError(error.message || "Could not update report status.");
+    } finally {
+      setReportActionId(null);
+    }
+  };
+
   // Product form input.
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -1004,6 +1143,10 @@ function App() {
     setExports([]);
     setDocuments([]);
     setComplianceRecords([]);
+    setReports([]);
+    setReportError("");
+    setReportMessage("");
+    setReportForm({ reportName: "", description: "" });
     setUsersError("");
     setUserMessage("");
     setImportError("");
@@ -1042,9 +1185,13 @@ function App() {
     { name: "Documents", icon: "▤" },
     { name: "Compliance", icon: "✓" },
     { name: "Reports", icon: "▧" },
+    { name: "Trade Risk Intelligence", icon: "◈" },
     ...(userRole === "ADMIN"
-  ? [{ name: "Reports", icon: "▧" }]
-  : []),,
+      ? [
+          { name: "Users", icon: "♙" },
+          { name: "Settings", icon: "⚙" },
+        ]
+      : []),
   ];
 
   const renderStats = () => (
@@ -1066,6 +1213,113 @@ function App() {
         <div className="number" style={{ color: "#16a34a" }}>Online</div>
       </div>
     </section>
+  );
+
+  // Reports page shared by ADMIN and OFFICER. Only ADMIN sees the table.
+  const renderReports = () => (
+    <>
+      <section className="form-section">
+        <h2>Reports Management</h2>
+        <p>Submit report details for administrative review. This form stores report details only, not the actual file.</p>
+
+        {reportError && <p role="alert" style={{ color: "#dc2626" }}>{reportError}</p>}
+        {reportMessage && <p role="status" style={{ color: "#15803d" }}>{reportMessage}</p>}
+
+        <form onSubmit={submitReport}>
+          <div className="form-group">
+            <label htmlFor="reportName">Report Name</label>
+            <input
+              id="reportName"
+              name="reportName"
+              value={reportForm.reportName}
+              onChange={(event) => setReportForm((previous) => ({ ...previous, reportName: event.target.value }))}
+              placeholder="Enter report name"
+              maxLength={255}
+              required
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="reportDescription">Description</label>
+            <textarea
+              id="reportDescription"
+              name="description"
+              value={reportForm.description}
+              onChange={(event) => setReportForm((previous) => ({ ...previous, description: event.target.value }))}
+              placeholder="Enter report details (optional)"
+              rows={4}
+              maxLength={1000}
+            />
+          </div>
+
+          <button className="btn" type="submit" disabled={reportSaving}>
+            {reportSaving ? "Submitting..." : "Submit Report"}
+          </button>
+        </form>
+      </section>
+
+      {userRole === "ADMIN" && (
+        <section className="table-section">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            <div>
+              <h2>Submitted Reports</h2>
+              <p>Monitor submissions and update their review status.</p>
+            </div>
+            <button className="btn" type="button" onClick={loadReports} disabled={reportsLoading}>
+              {reportsLoading ? "Refreshing..." : "Refresh Reports"}
+            </button>
+          </div>
+
+          {reportError && <p role="alert" style={{ color: "#dc2626" }}>{reportError}</p>}
+          {reportsLoading ? (
+            <p>Loading reports...</p>
+          ) : reports.length === 0 ? (
+            <p>No reports submitted yet.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Report Name</th>
+                    <th>Description</th>
+                    <th>Submitted By</th>
+                    <th>Date Submitted</th>
+                    <th>Status</th>
+                    <th>Update Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reports.map((report) => (
+                    <tr key={report.id}>
+                      <td>{report.id}</td>
+                      <td>{report.reportName}</td>
+                      <td>{report.description || "—"}</td>
+                      <td>{report.uploadedBy || "—"}</td>
+                      <td>{report.createdAt ? new Date(report.createdAt).toLocaleString() : "—"}</td>
+                      <td>{report.status}</td>
+                      <td>
+                        <select
+                          value={report.status}
+                          aria-label={`Update status for ${report.reportName}`}
+                          disabled={reportActionId !== null}
+                          onChange={(event) => updateReportStatus(report, event.target.value)}
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="Under Review">Under Review</option>
+                          <option value="Approved">Approved</option>
+                          <option value="Rejected">Rejected</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+    </>
   );
 
   const renderProducts = () => (
@@ -1691,7 +1945,7 @@ function App() {
                 {userRole === "ADMIN" ? (
                   <>
                     <li>Monitor registered products</li>
-                    
+                    <li>Review product reports</li>
                     <li>Manage user accounts</li>
                     <li>Configure system settings</li>
                   </>
@@ -1724,16 +1978,21 @@ function App() {
         return renderCompliance();
 
       case "Reports":
-       case "Reports":
-  return userRole === "ADMIN" ? (
-    <>
-      <h2>Product Reports</h2>
-      <p>Summary of registered product records.</p>
-      {renderStats()}
-    </>
-  ) : (
-    <p>You do not have permission to access this page.</p>
-  );
+        return renderReports();
+        case "Trade Risk Intelligence":
+  return renderTradeRisk();
+
+      case "Users":
+        return userRole === "ADMIN" ? renderUsers() : <p>You do not have permission to access this page.</p>;
+
+      case "Settings":
+        return userRole === "ADMIN" ? (
+          <section className="table-section">
+            <h2>System Settings</h2>
+            <p>Global ARM application configuration.</p>
+            <p>Advanced settings can be added later.</p>
+          </section>
+        ) : <p>You do not have permission to access this page.</p>;
 
       default:
         return <p>Select a page from the sidebar.</p>;

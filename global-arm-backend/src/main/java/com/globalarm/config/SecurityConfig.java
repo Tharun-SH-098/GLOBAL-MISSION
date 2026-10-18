@@ -1,6 +1,6 @@
 
 package com.globalarm.config;
-
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -18,7 +18,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
-
+@EnableMethodSecurity
 @Configuration
 public class SecurityConfig {
 
@@ -29,8 +29,7 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationManager authenticationManager(
-            AuthenticationConfiguration configuration)
-            throws Exception {
+            AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
 
@@ -45,28 +44,39 @@ public class SecurityConfig {
 
         http
             .cors(Customizer.withDefaults())
-
-            // Local development only. Review CSRF protection
-            // before deploying the application.
             .csrf(csrf -> csrf.disable())
 
             .authorizeHttpRequests(auth -> auth
+
                 // Allow browser CORS preflight requests.
-                
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                // Authentication endpoints must be reachable before login.
+                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/auth/me").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/logout").permitAll()
+
                 // Both ADMIN and OFFICER can submit reports.
                 .requestMatchers(HttpMethod.POST, "/api/reports")
-                .hasAnyRole("ADMIN", "OFFICER")
+                    .hasAnyRole("ADMIN", "OFFICER")
 
-                // Only ADMIN can view the reports table.
+                // Only ADMIN can view reports and update report status.
                 .requestMatchers(HttpMethod.GET, "/api/reports")
-                .hasRole("ADMIN")
-
-                // Only ADMIN can update report status.
+                    .hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PATCH, "/api/reports/**")
-                .hasRole("ADMIN")
+                    .hasRole("ADMIN")
+// Trade risk: ADMIN runs analysis.
+.requestMatchers(HttpMethod.POST, "/api/trade-risk/analyze")
+    .hasRole("ADMIN")
 
+// ADMIN and OFFICER can view findings.
+.requestMatchers(HttpMethod.GET, "/api/trade-risk")
+    .hasAnyRole("ADMIN", "OFFICER")
 
-                // All other endpoints require authentication.
+// Only ADMIN can review findings.
+.requestMatchers(HttpMethod.PATCH, "/api/trade-risk/**")
+    .hasRole("ADMIN")
+                // All other endpoints still require authentication.
                 .anyRequest().authenticated()
             )
 
@@ -87,7 +97,6 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
-
         CorsConfiguration configuration = new CorsConfiguration();
 
         configuration.setAllowedOrigins(
@@ -95,14 +104,8 @@ public class SecurityConfig {
         );
 
         configuration.setAllowedMethods(
-            List.of(
-                "GET",
-                "POST",
-                "PUT",
-                "PATCH",
-                "DELETE",
-                "OPTIONS"
-            )
+            List.of("GET", "POST", "PUT", "PATCH",
+                    "DELETE", "OPTIONS")
         );
 
         configuration.setAllowedHeaders(List.of("*"));
@@ -111,12 +114,8 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source =
             new UrlBasedCorsConfigurationSource();
 
-        source.registerCorsConfiguration(
-            "/**",
-            configuration
-        );
+        source.registerCorsConfiguration("/**", configuration);
 
         return source;
     }
 }
-

@@ -5,6 +5,7 @@ import Login from "./Login";
 
 const API = "http://localhost:8080";
 
+
 const EMPTY_IMPORT = {
   reference: "",
   supplier: "",
@@ -83,6 +84,103 @@ function App() {
   const [riskAnalyzing, setRiskAnalyzing] = useState(false);
   const [riskActionId, setRiskActionId] = useState(null);
 
+  const loadRiskFindings = useCallback(async () => {
+    setRiskLoading(true);
+    setRiskError("");
+
+    try {
+      const response = await fetch(`${API}/api/trade-risk`, {
+        method: "GET",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          response.status === 403
+            ? "You do not have permission to view risk findings."
+            : response.status === 401
+              ? "Your session has expired. Please log in again."
+              : `Unable to load risk findings (HTTP ${response.status}).`
+        );
+      }
+
+      const data = await response.json();
+      setRiskFindings(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setRiskError(error.message || "Unable to connect to the backend.");
+    } finally {
+      setRiskLoading(false);
+    }
+  }, []);
+
+  const analyzeTradeRisks = useCallback(async () => {
+    setRiskAnalyzing(true);
+    setRiskError("");
+    setRiskMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/trade-risk/analyze`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            (response.status === 403
+              ? "Only administrators can run risk analysis."
+              : `Risk analysis failed (HTTP ${response.status}).`)
+        );
+      }
+
+      setRiskMessage(
+        `${data.message || "Analysis completed."} New findings: ${data.newFindings ?? 0}`
+      );
+      await loadRiskFindings();
+    } catch (error) {
+      setRiskError(error.message || "Unable to run risk analysis.");
+    } finally {
+      setRiskAnalyzing(false);
+    }
+  }, [loadRiskFindings]);
+
+  const updateRiskReview = useCallback(async (id, reviewStatus) => {
+    setRiskActionId(id);
+    setRiskError("");
+    setRiskMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/trade-risk/${id}/review`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewStatus }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            (response.status === 403
+              ? "Only administrators can update reviews."
+              : `Unable to update the review (HTTP ${response.status}).`)
+        );
+      }
+
+      setRiskFindings((previous) =>
+        previous.map((finding) => (finding.id === id ? data : finding))
+      );
+      setRiskMessage(`Risk finding #${id} updated to ${reviewStatus}.`);
+    } catch (error) {
+      setRiskError(error.message || "Unable to update the review.");
+    } finally {
+      setRiskActionId(null);
+    }
+  }, []);
+
+
   const [products, setProducts] = useState([]);
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -155,6 +253,13 @@ function App() {
   const [complianceError, setComplianceError] = useState("");
   const [complianceMessage, setComplianceMessage] = useState("");
   const [complianceForm, setComplianceForm] = useState({ ...EMPTY_COMPLIANCE });
+
+
+  useEffect(() => {
+    if (loggedIn && currentPage === "Trade Risk Intelligence") {
+      loadRiskFindings();
+    }
+  }, [loggedIn, currentPage, loadRiskFindings]);
 
   // Check login session.
   useEffect(() => {
@@ -1932,6 +2037,150 @@ function App() {
   );
 
   const renderPage = () => {
+
+const renderTradeRisk = () => {
+  const highRiskCount = riskFindings.filter(
+    (item) => item.riskLevel === "High"
+  ).length;
+
+  const mediumRiskCount = riskFindings.filter(
+    (item) => item.riskLevel === "Medium"
+  ).length;
+
+  const openCount = riskFindings.filter(
+    (item) => item.reviewStatus === "Open"
+  ).length;
+
+  return (
+    <div className="dashboard">
+      <h2>AI Trade Risk Intelligence Centre</h2>
+      <p>
+        Identify potential import and export risks and track administrator reviews.
+      </p>
+
+      {userRole === "ADMIN" && (
+        <section className="form-section">
+          <h3>Risk Analysis</h3>
+          <p>
+            Analyze existing import and export records using the configured
+            risk rules.
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={analyzeTradeRisks}
+            disabled={riskAnalyzing}
+          >
+            {riskAnalyzing ? "Analyzing..." : "Run Risk Analysis"}
+          </button>
+        </section>
+      )}
+
+      {riskError && (
+        <p role="alert" className="error-message">
+          {riskError}
+        </p>
+      )}
+
+      {riskMessage && (
+        <p role="status">{riskMessage}</p>
+      )}
+
+      <section className="dashboard">
+        <div className="card">
+          <h3>Total Findings</h3>
+          <p>{riskFindings.length}</p>
+        </div>
+
+        <div className="card">
+          <h3>High Risk</h3>
+          <p>{highRiskCount}</p>
+        </div>
+
+        <div className="card">
+          <h3>Medium Risk</h3>
+          <p>{mediumRiskCount}</p>
+        </div>
+
+        <div className="card">
+          <h3>Open Reviews</h3>
+          <p>{openCount}</p>
+        </div>
+      </section>
+
+      <section className="table-section">
+        <h3>Risk Findings</h3>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={loadRiskFindings}
+          disabled={riskLoading}
+        >
+          {riskLoading ? "Refreshing..." : "Refresh Findings"}
+        </button>
+
+        {riskLoading ? (
+          <p>Loading risk findings...</p>
+        ) : riskFindings.length === 0 ? (
+          <p>
+            No findings available. Administrators can run risk analysis to
+            check existing records.
+          </p>
+        ) : (
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reference</th>
+                  <th>Type</th>
+                  <th>Risk Score</th>
+                  <th>Risk Level</th>
+                  <th>Explanation</th>
+                  <th>Review Status</th>
+                  {userRole === "ADMIN" && <th>Action</th>}
+                </tr>
+              </thead>
+
+              <tbody>
+                {riskFindings.map((finding) => (
+                  <tr key={finding.id}>
+                    <td>{finding.reference}</td>
+                    <td>{finding.recordType}</td>
+                    <td>{finding.riskScore}/100</td>
+                    <td>{finding.riskLevel}</td>
+                    <td>{finding.explanation}</td>
+                    <td>{finding.reviewStatus}</td>
+
+                    {userRole === "ADMIN" && (
+                      <td>
+                        <select
+                          value={finding.reviewStatus}
+                          disabled={riskActionId === finding.id}
+                          onChange={(event) =>
+                            updateRiskReview(
+                              finding.id,
+                              event.target.value
+                            )
+                          }
+                        >
+                          <option value="Open">Open</option>
+                          <option value="Reviewed">Reviewed</option>
+                          <option value="Resolved">Resolved</option>
+                        </select>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+
     switch (currentPage) {
       case "Dashboard":
         return (
